@@ -46,6 +46,7 @@ func main() {
 		slog.SetDefault(slog.New(logging.NewMultiHandler(logHandler, fileHandler)))
 	}
 
+	slog.Info("config loaded", cfg.LogArgs()...)
 	checkDependencies(cfg)
 	removeStaleScratchDirs()
 

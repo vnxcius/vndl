@@ -95,3 +95,27 @@ func splitCSV(v string) []string {
 	}
 	return out
 }
+
+// LogArgs lists the effective settings under their env var names, for the
+// startup log. Nothing here is secret.
+func (c Config) LogArgs() []any {
+	return []any{
+		"PORT", c.Port,
+		"ALLOWED_ORIGINS", strings.Join(c.AllowedOrigins, ","),
+		"RATE_LIMIT_RPS", c.RateLimitRPS,
+		"RATE_LIMIT_BURST", c.RateLimitBurst,
+		"MAX_CONCURRENT_YTDLP", c.MaxConcurrentYtDlp,
+		"CONCURRENCY_MAX_WAIT", c.ConcurrencyMaxWait.String(),
+		"MAX_JOBS_PER_IP", c.MaxJobsPerIP,
+		"MAX_JOB_DURATION", c.MaxJobDuration.String(),
+		"MAX_FILESIZE", c.MaxFilesize,
+		"MAX_SSE_CONNECTIONS", c.MaxSSEConnections,
+		"JOB_TTL", c.JobTTL.String(),
+		"PROBE_CACHE_TTL", c.ProbeCacheTTL.String(),
+		"YTDLP_PATH", c.YtDlpPath,
+		"FFMPEG_PATH", c.FfmpegPath,
+		"LOG_FORMAT", c.LogFormat,
+		"LOG_DIR", c.LogDir,
+		"LOG_RETENTION_DAYS", c.LogRetentionDays,
+	}
+}
