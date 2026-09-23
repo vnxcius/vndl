@@ -137,6 +137,12 @@ setup on the server:
 
 Every push to `main` then rebuilds and restarts the stack automatically.
 
+The job runs in the runner's own checkout, not your clone, so it doesn't
+see a `.env` you keep elsewhere. Point it at one in GitLab → Settings →
+CI/CD → Variables: `VNDL_ENV_FILE` = the file's absolute host path
+(readable by the `gitlab-runner` user). Use an absolute `LOGS_DIR` in it,
+since `./logs` resolves against the runner's checkout.
+
 ## Project layout
 
 ```bash

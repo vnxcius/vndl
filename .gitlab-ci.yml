@@ -11,9 +11,15 @@ deploy:
     - if: '$CI_COMMIT_BRANCH == "main"'
   variables:
     GIT_CLEAN_FLAGS: -ffdx -e .env -e logs/ # keep .env and log history across deploys
+    # Host path of the env file to deploy with. This job runs in the runner's
+    # own checkout, so point it at a fixed file via Settings → CI/CD → Variables.
+    VNDL_ENV_FILE: .env
   resource_group: home-server-deploy # only one deploy at a time
   script:
-    - test -f .env && { set -a; source .env; set +a; } || true
+    # Exported vars take precedence over any .env in this checkout.
+    - >
+      if test -f "$VNDL_ENV_FILE"; then set -a; . "$VNDL_ENV_FILE"; set +a; echo "using env file $VNDL_ENV_FILE";
+      else echo "WARNING: env file $VNDL_ENV_FILE not found, deploying with defaults"; fi
     - docker compose up -d --build
     - docker image prune -f
     # --retry-all-errors, not --retry-connrefused: the published port can
