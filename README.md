@@ -31,7 +31,7 @@ server-side — no database, no persisted files.
 - Successful `/probe` results are cached in memory for a few minutes so
   the same link isn't re-probed repeatedly.
 - Sensitive (age-restricted) tweets, which yt-dlp can't see logged out,
-  fall back to the public [fxtwitter](https://github.com/FxEmbed/FxEmbed)
+  fall back to the public [FxEmbed API](https://docs.fxembed.com/)
   API. Only the tweet ID is sent, from the server — never the visitor's IP
   — and only when yt-dlp has already failed for that reason.
 - Only the platform host is ever logged (e.g. `www.youtube.com`) — never
@@ -136,6 +136,14 @@ frontend/
     hooks/              .use-download-progress (SSE)
     lib/                .api client, formatting helpers
 ```
+
+## Credits
+
+- [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [FFmpeg](https://ffmpeg.org/)
+  do the actual downloading and processing.
+- Sensitive tweets are resolved through the [FxEmbed API](https://docs.fxembed.com/)
+  (`api.fxtwitter.com`) — thanks to the [FxEmbed](https://github.com/FxEmbed/FxEmbed)
+  project for running it publicly.
 
 ## Changelog
 
