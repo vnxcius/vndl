@@ -395,8 +395,10 @@ function pickDefaultFormat(formats: Format[]): string | null {
 }
 
 function videoOnlyDistinct(formats: Format[]): Format[] {
-  return formats
-    // Empty vcodec means "unknown", not audio-only — some sites report it for every format.
-    .filter((f) => f.vcodec !== "none" && f.resolution !== "audio only")
-    .sort((a, b) => (b.height || 0) - (a.height || 0) || (b.filesize || 0) - (a.filesize || 0));
+  return (
+    formats
+      // Empty vcodec means "unknown", not audio-only — some sites report it for every format.
+      .filter((f) => f.vcodec !== "none" && f.resolution !== "audio only")
+      .sort((a, b) => (b.height || 0) - (a.height || 0) || (b.filesize || 0) - (a.filesize || 0))
+  );
 }
