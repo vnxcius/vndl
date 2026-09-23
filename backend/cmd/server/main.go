@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"time"
 
 	"vndl/internal/api"
@@ -46,6 +47,7 @@ func main() {
 	}
 
 	checkDependencies(cfg)
+	removeStaleScratchDirs()
 
 	mgr := jobs.NewManager(cfg)
 	rl := middleware.NewRateLimiter(cfg.RateLimitRPS, cfg.RateLimitBurst)
@@ -69,6 +71,18 @@ func main() {
 	if err := server.ListenAndServe(); err != nil {
 		slog.Error("server stopped", "err", err)
 		os.Exit(1)
+	}
+}
+
+// removeStaleScratchDirs clears job dirs a crash or kill left behind; the
+// per-request cleanup never ran for them.
+func removeStaleScratchDirs() {
+	dirs, _ := filepath.Glob(filepath.Join(os.TempDir(), "vndl-job-*"))
+	for _, d := range dirs {
+		_ = os.RemoveAll(d)
+	}
+	if len(dirs) > 0 {
+		slog.Info("removed stale job dirs", "count", len(dirs))
 	}
 }
 

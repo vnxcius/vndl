@@ -87,6 +87,12 @@ only serves plain HTTP.
 | `ALLOWED_ORIGINS` | `http://localhost:5173` | CORS allow-list |
 | `RATE_LIMIT_RPS` / `RATE_LIMIT_BURST` | `1` / `5` | per-IP token bucket |
 | `MAX_CONCURRENT_YTDLP` | `6` | server-wide cap on concurrent yt-dlp/ffmpeg processes |
+| `MAX_JOBS_PER_IP` | `2` | concurrent downloads per client (IPv6 grouped by /64); `0` disables |
+| `MAX_JOB_DURATION` | `30m` | a download running longer is stopped; `0` disables |
+| `MAX_FILESIZE` | `2G` | yt-dlp `--max-filesize` |
+| `MAX_SSE_CONNECTIONS` | `512` | server-wide cap on progress streams; `0` disables |
+| `FRONTEND_BIND` | `127.0.0.1` | interface the frontend port is published on |
+| `BACKEND_MEM_LIMIT` / `BACKEND_CPUS` | `2g` / `2` | backend container limits |
 | `CONCURRENCY_MAX_WAIT` | `15s` | max wait for a free slot over the cap |
 | `JOB_TTL` | `5m` | how long a finished job stays queryable |
 | `YTDLP_PATH` / `FFMPEG_PATH` | `yt-dlp` / auto | binary paths |
@@ -98,7 +104,15 @@ only serves plain HTTP.
 The backend's port is never published by `docker-compose.yml` — the
 frontend (Caddy) is the sole entry point, which per-IP rate limiting
 depends on. Client IP is read from `CF-Connecting-IP` (Cloudflare
-Tunnel) first, then `X-Forwarded-For`, then the raw TCP peer.
+Tunnel) first, then `X-Forwarded-For`, then the raw TCP peer. That's why
+Caddy is published on loopback only: cloudflared must run on the same
+host. If it doesn't, set `FRONTEND_BIND=0.0.0.0` and firewall the port to
+cloudflared's address.
+
+yt-dlp can still make requests the host allow-list never sees
+(redirects, manifests, media segments). For a public deployment, also
+block the backend container's egress to private/LAN ranges at the host
+firewall (e.g. the `DOCKER-USER` iptables chain).
 
 ## Deployment
 

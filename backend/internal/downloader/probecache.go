@@ -63,5 +63,21 @@ func (c *ProbeCache) Set(url string, meta *Metadata) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if _, exists := c.items[url]; !exists && len(c.items) >= maxCacheEntries {
+		evictOldest(c.items, func(e probeCacheEntry) time.Time { return e.cachedAt })
+	}
 	c.items[url] = probeCacheEntry{meta: meta, cachedAt: time.Now()}
+}
+
+const maxCacheEntries = 1000
+
+func evictOldest[V any](m map[string]V, at func(V) time.Time) {
+	var oldestKey string
+	var oldest time.Time
+	for k, v := range m {
+		if t := at(v); oldestKey == "" || t.Before(oldest) {
+			oldestKey, oldest = k, t
+		}
+	}
+	delete(m, oldestKey)
 }

@@ -15,11 +15,20 @@ services:
       RATE_LIMIT_RPS: "1"
       RATE_LIMIT_BURST: "5"
       MAX_CONCURRENT_YTDLP: "6"
+      MAX_JOBS_PER_IP: "2"
+      MAX_JOB_DURATION: "30m"
+      MAX_FILESIZE: "2G"
       JOB_TTL: "5m"
       LOG_DIR: "/var/log/vndl" # bind-mounted below to ./logs at the repo root
       LOG_RETENTION_DAYS: "30"
     volumes:
       - ./logs:/var/log/vndl
+    init: true # reaps yt-dlp/ffmpeg children the server doesn't wait on
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 256
+    mem_limit: ${BACKEND_MEM_LIMIT:-2g}
+    cpus: ${BACKEND_CPUS:-2}
     restart: unless-stopped
 
   frontend:
@@ -27,8 +36,11 @@ services:
       context: ./frontend
       args:
         VITE_API_BASE: ""
+    # Loopback only: the backend trusts CF-Connecting-IP, so Caddy must be
+    # reachable solely through cloudflared on this host. Set FRONTEND_BIND
+    # to 0.0.0.0 only if cloudflared runs elsewhere and the port is firewalled.
     ports:
-      - "${FRONTEND_PORT:-8081}:80"
+      - "${FRONTEND_BIND:-127.0.0.1}:${FRONTEND_PORT:-8081}:80"
     depends_on:
       - backend
     restart: unless-stopped

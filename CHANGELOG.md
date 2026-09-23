@@ -4,6 +4,32 @@ All notable changes to this project are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [Semantic Versioning](https://semver.org/).
 
+## [1.12.0] - 2026-09-22
+
+### Security
+
+Hardening from a second security audit:
+
+- Downloads are bounded: 30-minute max duration, 2 GB max file size, at
+  most 2 concurrent downloads per client, and playlist/channel links only
+  ever fetch their first item.
+- yt-dlp runs with `--ignore-config` and only site-specific extractors —
+  the generic extractor, which follows arbitrary links off an allowed
+  host, is disabled (except for the server-resolved fxtwitter media URL).
+- Canceling or timing out a download now kills yt-dlp's whole process
+  group, so an ffmpeg child can no longer outlive it and stall the
+  request.
+- Rate limiting groups IPv6 clients by /64; the frontend port is
+  published on loopback only (`FRONTEND_BIND`) so `CF-Connecting-IP`
+  can't be forged by bypassing the tunnel.
+- Error logs no longer include yt-dlp's content IDs or URLs.
+- SSE streams close for jobs that never start, with a server-wide
+  connection cap.
+- Backend container: `init`, all capabilities dropped,
+  `no-new-privileges`, PID/memory/CPU limits; leftover job directories are
+  removed on startup. The fxtwitter client no longer follows redirects,
+  and in-memory caches are size-capped.
+
 ## [1.11.0] - 2026-09-22
 
 ### Added

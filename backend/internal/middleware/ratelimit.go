@@ -3,6 +3,7 @@ package middleware
 import (
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
@@ -70,8 +71,7 @@ func (rl *RateLimiter) allow(ip string) bool {
 
 func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ip := ClientIP(r)
-		if !rl.allow(ip) {
+		if !rl.allow(ClientKey(r)) {
 			http.Error(w, "rate limit exceeded, slow down", http.StatusTooManyRequests)
 			return
 		}
@@ -79,10 +79,26 @@ func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 	})
 }
 
+// ClientKey identifies a client for limiting: its IP, or its /64 for IPv6,
+// since one IPv6 client typically controls a whole /64.
+func ClientKey(r *http.Request) string {
+	ip := ClientIP(r)
+	addr, err := netip.ParseAddr(ip)
+	if err != nil || addr.Unmap().Is4() {
+		return ip
+	}
+	prefix, err := addr.Prefix(64)
+	if err != nil {
+		return ip
+	}
+	return prefix.String()
+}
+
 // CF-Connecting-IP (set by Cloudflare's edge) is trusted first since
 // cloudflared sits in front of Caddy now; X-Forwarded-For's rightmost entry
 // is the fallback for access that doesn't go through the tunnel. Both are
-// only safe to trust because the backend port is never reachable directly.
+// only safe to trust because Caddy is published on loopback only
+// (FRONTEND_BIND) and the backend port is never published at all.
 func ClientIP(r *http.Request) string {
 	if cfIP := r.Header.Get("CF-Connecting-IP"); cfIP != "" {
 		return cfIP

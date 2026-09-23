@@ -87,12 +87,33 @@ type Metadata struct {
 	Formats  []Format `json:"formats"`
 }
 
+// Only site-specific extractors: the generic one follows whatever a page
+// links to, which would bypass the host allow-list.
+const (
+	siteExtractors   = "default,-generic"
+	directExtractors = "generic"
+)
+
+// baseArgs applies to every yt-dlp run: no config files, a single item even
+// for playlist/channel URLs, and a bounded socket timeout.
+func baseArgs(extractors string) []string {
+	return []string{
+		"--ignore-config",
+		"--use-extractors", extractors,
+		"--no-playlist",
+		"--playlist-items", "1",
+		"--socket-timeout", "30",
+		"--no-warnings",
+	}
+}
+
 func Probe(ctx context.Context, cfg config.Config, rawURL string) (*Metadata, error) {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, cfg.YtDlpPath,
-		"-j", "--no-warnings", "--no-playlist", "--skip-download", rawURL)
+	args := append(baseArgs(siteExtractors), "-j", "--skip-download", "--", rawURL)
+	cmd := exec.CommandContext(ctx, cfg.YtDlpPath, args...)
+	killGroupOnCancel(cmd)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -113,13 +134,19 @@ func Probe(ctx context.Context, cfg config.Config, rawURL string) (*Metadata, er
 // stdout — yt-dlp/ffmpeg silently skip merging/transcoding when writing to
 // a pipe. Caller deletes outDir after serving the result. container only
 // applies when merging separate streams; ignored for progressive formats
-// and audioOnly.
-func BuildDownloadCmd(ctx context.Context, cfg config.Config, rawURL, formatID string, audioOnly bool, container, outDir string) *exec.Cmd {
-	args := []string{
-		"--no-playlist",
+// and audioOnly. direct marks a server-resolved media URL (fxtwitter),
+// the only case allowed through the generic extractor.
+func BuildDownloadCmd(ctx context.Context, cfg config.Config, rawURL, formatID string, audioOnly, direct bool, container, outDir string) *exec.Cmd {
+	extractors := siteExtractors
+	if direct {
+		extractors = directExtractors
+	}
+	args := append(baseArgs(extractors),
 		"--newline",
-		"--no-warnings",
 		"--abort-on-unavailable-fragments", // default skips dead fragments, stalling then yielding a corrupt file
+	)
+	if cfg.MaxFilesize != "" {
+		args = append(args, "--max-filesize", cfg.MaxFilesize)
 	}
 	if cfg.FfmpegPath != "" {
 		args = append(args, "--ffmpeg-location", cfg.FfmpegPath)
@@ -138,9 +165,29 @@ func BuildDownloadCmd(ctx context.Context, cfg config.Config, rawURL, formatID s
 		args = append(args, "-f", f, "--merge-output-format", container)
 	}
 
-	args = append(args, "-o", filepath.Join(outDir, "output.%(ext)s"), rawURL)
+	args = append(args, "-o", filepath.Join(outDir, "output.%(ext)s"), "--", rawURL)
 
-	return exec.CommandContext(ctx, cfg.YtDlpPath, args...)
+	cmd := exec.CommandContext(ctx, cfg.YtDlpPath, args...)
+	killGroupOnCancel(cmd)
+	return cmd
+}
+
+// IsMaxFilesizeLine reports yt-dlp's notice for a download it skipped
+// because of --max-filesize (it exits 0 without writing a file).
+func IsMaxFilesizeLine(line string) bool {
+	return strings.Contains(line, "larger than max-filesize")
+}
+
+var (
+	extractorIDRe = regexp.MustCompile(`\[([\w:-]+)\] [^\s:]+:`)
+	urlRe         = regexp.MustCompile(`https?://\S+`)
+)
+
+// ScrubError strips content IDs and URLs from yt-dlp output before it's
+// logged, e.g. "ERROR: [youtube] <id>: Video unavailable".
+func ScrubError(s string) string {
+	s = urlRe.ReplaceAllString(s, "<url>")
+	return extractorIDRe.ReplaceAllString(s, "[$1] <id>:")
 }
 
 func ContentType(ext string) string {

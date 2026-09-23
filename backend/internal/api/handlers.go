@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -33,10 +34,18 @@ type Server struct {
 	rl     *middleware.RateLimiter
 	cl     *middleware.ConcurrencyLimiter
 	probes *downloader.ProbeCache
+
+	perIP *middleware.InFlightLimiter // concurrent /file per client
+	sse   chan struct{}               // server-wide SSE connection slots; nil = unlimited
 }
 
 func NewServer(cfg config.Config, mgr *jobs.Manager, rl *middleware.RateLimiter, cl *middleware.ConcurrencyLimiter, probes *downloader.ProbeCache) *Server {
-	return &Server{cfg: cfg, mgr: mgr, rl: rl, cl: cl, probes: probes}
+	s := &Server{cfg: cfg, mgr: mgr, rl: rl, cl: cl, probes: probes,
+		perIP: middleware.NewInFlightLimiter(cfg.MaxJobsPerIP)}
+	if cfg.MaxSSEConnections > 0 {
+		s.sse = make(chan struct{}, cfg.MaxSSEConnections)
+	}
+	return s
 }
 
 // expensive applies both the per-IP rate limiter and the server-wide
@@ -55,7 +64,7 @@ func (s *Server) Routes() *http.ServeMux {
 	// the whole response, including streaming to a slow client, long after
 	// yt-dlp has exited. file() acquires/releases the slot itself instead.
 	mux.Handle("GET /api/downloads/{id}/file", s.rl.Middleware(http.HandlerFunc(s.file)))
-	mux.HandleFunc("POST /api/downloads/{id}/cancel", s.cancel)
+	mux.Handle("POST /api/downloads/{id}/cancel", s.rl.Middleware(http.HandlerFunc(s.cancel)))
 	return mux
 }
 
@@ -106,7 +115,7 @@ func (s *Server) probe(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if err != nil {
-			ev.Set("status", "error").Set("error", err.Error())
+			ev.Set("status", "error").Set("error", downloader.ScrubError(err.Error()))
 			// 422, not 5xx: Cloudflare replaces 5xx bodies with its own error page.
 			writeError(w, http.StatusUnprocessableEntity, downloader.FriendlyError(err.Error()))
 			return
@@ -125,7 +134,6 @@ type createDownloadRequest struct {
 	FormatID  string `json:"format_id"`
 	AudioOnly bool   `json:"audio_only"`
 	Title     string `json:"title"`
-	Ext       string `json:"ext"`
 	Container string `json:"container"`
 }
 
@@ -167,18 +175,15 @@ func (s *Server) createDownload(w http.ResponseWriter, r *http.Request) {
 	if title == "" {
 		title = "download"
 	}
-	ext := req.Ext
-	container := req.Container
-	if req.AudioOnly {
-		ext = "mp3"
-		container = ""
-	} else {
+	// The client's "ext" is ignored — /file names the result after the file
+	// yt-dlp actually wrote.
+	ext, container := "mp3", ""
+	if !req.AudioOnly {
+		container = req.Container
 		if container == "" {
 			container = "mkv"
 		}
-		if ext == "" {
-			ext = container
-		}
+		ext = container
 	}
 
 	job := s.mgr.Create(cleanURL, req.FormatID, req.AudioOnly, title, ext, container)
@@ -203,12 +208,30 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if s.sse != nil {
+		select {
+		case s.sse <- struct{}{}:
+			defer func() { <-s.sse }()
+		default:
+			writeError(w, http.StatusServiceUnavailable, "server is at capacity, try again shortly")
+			return
+		}
+	}
+
 	ch, cancel, ok := job.Subscribe()
 	if !ok {
 		writeError(w, http.StatusTooManyRequests, "too many active connections for this download")
 		return
 	}
 	defer cancel()
+
+	// A job whose /file never starts publishes nothing; don't hold the
+	// connection past its TTL, nor any stream past the longest possible job.
+	pendingTimeout := time.After(s.mgr.TTL())
+	var hardDeadline <-chan time.Time
+	if s.cfg.MaxJobDuration > 0 {
+		hardDeadline = time.After(s.cfg.MaxJobDuration + s.mgr.TTL())
+	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -225,6 +248,13 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
 			return
+		case <-hardDeadline:
+			return
+		case <-pendingTimeout:
+			if status, _ := job.Status(); status == jobs.StatusPending {
+				return
+			}
+			pendingTimeout = nil
 		case ev, open := <-ch:
 			if !open {
 				return
@@ -283,6 +313,15 @@ func (s *Server) file(w http.ResponseWriter, r *http.Request) {
 		Set("format_id", job.FormatID).
 		Set("audio_only", job.AudioOnly)
 
+	// Checked before Claim so a rejected request doesn't burn the job.
+	releaseIP, ok := s.perIP.Acquire(middleware.ClientKey(r))
+	if !ok {
+		ev.Set("status", "error").Set("error", "per-ip job limit")
+		writeError(w, http.StatusTooManyRequests, "too many downloads in progress from your network — wait for one to finish")
+		return
+	}
+	defer releaseIP()
+
 	if !job.Claim() {
 		ev.Set("status", "error").Set("error", "already streaming")
 		writeError(w, http.StatusConflict, "this download has already been started")
@@ -305,17 +344,17 @@ func (s *Server) file(w http.ResponseWriter, r *http.Request) {
 	}
 	defer os.RemoveAll(scratch)
 
-	source, formatID := job.URL, job.FormatID
+	source, formatID, direct := job.URL, job.FormatID, false
 	if downloader.IsFxFormat(formatID) && downloader.IsTwitterURL(source) {
 		ev.Set("fallback", "fxtwitter")
-		direct, err := downloader.ResolveFxURL(r.Context(), source, formatID, slog.With("endpoint", "file", "job_id", job.ID))
+		mediaURL, err := downloader.ResolveFxURL(r.Context(), source, formatID, slog.With("endpoint", "file", "job_id", job.ID))
 		if err != nil {
 			job.Fail(err.Error())
 			ev.Set("status", "error").Set("error", err.Error())
 			writeError(w, http.StatusUnprocessableEntity, "could not resolve this tweet's video — try fetching it again")
 			return
 		}
-		source, formatID = direct, ""
+		source, formatID, direct = mediaURL, "", true
 	}
 
 	// Released right after cmd.Wait() below, not deferred past file
@@ -331,10 +370,13 @@ func (s *Server) file(w http.ResponseWriter, r *http.Request) {
 	defer release()
 
 	ctx, cancel := context.WithCancel(r.Context())
+	if s.cfg.MaxJobDuration > 0 {
+		ctx, cancel = context.WithTimeout(r.Context(), s.cfg.MaxJobDuration)
+	}
 	defer cancel()
 	job.SetCancelFunc(cancel)
 
-	cmd := downloader.BuildDownloadCmd(ctx, s.cfg, source, formatID, job.AudioOnly, job.Container, scratch)
+	cmd := downloader.BuildDownloadCmd(ctx, s.cfg, source, formatID, job.AudioOnly, direct, job.Container, scratch)
 
 	// Captured so a failure carries more detail than a bare "exit status 1".
 	var stderrBuf bytes.Buffer
@@ -359,12 +401,7 @@ func (s *Server) file(w http.ResponseWriter, r *http.Request) {
 
 	// Must drain stdout to EOF before Wait(), per exec.Cmd's own docs —
 	// otherwise Wait() can close the pipe before streamProgress reads it.
-	stdoutDone := make(chan struct{})
-	go func() {
-		streamProgress(job, stdout)
-		close(stdoutDone)
-	}()
-	<-stdoutDone
+	tooLarge := streamProgress(job, stdout)
 
 	waitErr := cmd.Wait()
 	release()
@@ -375,11 +412,18 @@ func (s *Server) file(w http.ResponseWriter, r *http.Request) {
 			writeError(w, statusClientClosedRequest, "download was canceled")
 			return
 		}
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			job.Fail("timed out")
+			ev.Set("status", "error").Set("error", "job exceeded max duration")
+			writeError(w, http.StatusUnprocessableEntity, "this download took too long and was stopped — try a lower quality")
+			return
+		}
 		detail := strings.TrimSpace(stderrBuf.String())
 		fullErr := waitErr.Error()
 		if detail != "" {
 			fullErr += ": " + detail
 		}
+		fullErr = downloader.ScrubError(fullErr)
 		job.Fail(fullErr)
 		ev.Set("status", "error").Set("error", fullErr)
 		writeError(w, http.StatusUnprocessableEntity, downloader.FriendlyError(detail)) // see probe()
@@ -387,6 +431,12 @@ func (s *Server) file(w http.ResponseWriter, r *http.Request) {
 	}
 
 	matches, _ := filepath.Glob(filepath.Join(scratch, "output.*"))
+	if len(matches) == 0 && tooLarge {
+		job.Fail("file too large")
+		ev.Set("status", "error").Set("error", "exceeds max filesize")
+		writeError(w, http.StatusUnprocessableEntity, "this file is larger than the server allows ("+s.cfg.MaxFilesize+") — try a lower quality")
+		return
+	}
 	if len(matches) != 1 {
 		job.Fail("unexpected output from yt-dlp")
 		ev.Set("status", "error").Set("error", fmt.Sprintf("expected 1 output file, found %d", len(matches)))
@@ -426,7 +476,9 @@ func (s *Server) file(w http.ResponseWriter, r *http.Request) {
 
 const progressLogInterval = 5 * time.Second // plus always on phase change
 
-func streamProgress(job *jobs.Job, r io.Reader) {
+// streamProgress reports whether yt-dlp skipped the download for exceeding
+// --max-filesize.
+func streamProgress(job *jobs.Job, r io.Reader) (tooLarge bool) {
 	buf := make([]byte, 4096)
 	var partial strings.Builder
 	var smoother downloader.ETASmoother
@@ -466,6 +518,9 @@ func streamProgress(job *jobs.Job, r io.Reader) {
 					if line == "" {
 						continue
 					}
+					if downloader.IsMaxFilesizeLine(line) {
+						tooLarge = true
+					}
 					if ev, ok := downloader.ParseProgressLine(line); ok {
 						if ev.Status == "downloading" {
 							ev.ETA = smoother.Smooth(ev.ETA)
@@ -479,7 +534,7 @@ func streamProgress(job *jobs.Job, r io.Reader) {
 			}
 		}
 		if err != nil {
-			return
+			return tooLarge
 		}
 	}
 }

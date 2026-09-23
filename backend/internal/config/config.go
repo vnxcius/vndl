@@ -22,6 +22,10 @@ type Config struct {
 	ProbeCacheTTL      time.Duration
 	LogDir             string
 	LogRetentionDays   int
+	MaxJobDuration     time.Duration
+	MaxFilesize        string
+	MaxJobsPerIP       int
+	MaxSSEConnections  int
 }
 
 func Load() Config {
@@ -39,6 +43,10 @@ func Load() Config {
 		ProbeCacheTTL:      getEnvDuration("PROBE_CACHE_TTL", 10*time.Minute),
 		LogDir:             getEnv("LOG_DIR", ""), // empty disables file logging (stdout only)
 		LogRetentionDays:   getEnvInt("LOG_RETENTION_DAYS", 30),
+		MaxJobDuration:     getEnvDuration("MAX_JOB_DURATION", 30*time.Minute), // 0 = no limit
+		MaxFilesize:        getEnv("MAX_FILESIZE", "2G"),                       // yt-dlp --max-filesize syntax
+		MaxJobsPerIP:       getEnvInt("MAX_JOBS_PER_IP", 2),                    // concurrent /file per client; 0 = no limit
+		MaxSSEConnections:  getEnvInt("MAX_SSE_CONNECTIONS", 512),              // server-wide; 0 = no limit
 	}
 }
 

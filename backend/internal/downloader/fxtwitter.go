@@ -25,7 +25,12 @@ const fxFormatPrefix = "fx-"
 var (
 	fxAPIBase    = "https://api.fxtwitter.com"
 	fxRetryDelay = time.Second
-	fxHTTPClient = &http.Client{Timeout: 10 * time.Second}
+	fxHTTPClient = &http.Client{
+		Timeout: 10 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse // never follow the API anywhere else
+		},
+	}
 	tweetIDRe    = regexp.MustCompile(`/status(?:es)?/(\d+)`)
 	videoIndexRe = regexp.MustCompile(`/video/(\d+)`)
 	dimensionsRe = regexp.MustCompile(`/(\d+)x(\d+)/`)
@@ -178,6 +183,9 @@ func fxCacheSet(id string, tweet *fxTweet) {
 		if now.Sub(e.cachedAt) > fxCacheTTL {
 			delete(fxCache.items, k)
 		}
+	}
+	if len(fxCache.items) >= maxCacheEntries {
+		evictOldest(fxCache.items, func(e fxCacheEntry) time.Time { return e.cachedAt })
 	}
 	fxCache.items[id] = fxCacheEntry{tweet: tweet, cachedAt: now}
 }
