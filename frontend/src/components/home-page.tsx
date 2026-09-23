@@ -3,6 +3,7 @@ import { Dot } from "@/components/dot";
 import { DownloadConsole } from "@/components/download-console";
 import { NsfwToggle } from "@/components/nsfw-toggle";
 import { ThemeSelector } from "@/components/theme-selector";
+import { Prompt } from "./prompt";
 
 const REPO_URL = "https://gitlab.com/vncius/vndl";
 const CHANGELOG_URL = `${REPO_URL}/-/blob/main/CHANGELOG.md`;
@@ -11,13 +12,14 @@ export function HomePage() {
   return (
     <div className="mx-auto flex min-h-svh max-w-2xl flex-col px-4 py-12 sm:py-20">
       <header className="mb-14 flex flex-col gap-4">
-        <p className="font-mono text-sm font-semibold">vndl</p>
-        <div className="text-sm text-muted-foreground">
-          <p>
-            <span className="text-green-600 dark:text-green-400">$</span> cat ~/readme
-          </p>
-          <p>privacy-first focused video &amp; audio downloader</p>
-          <p className="mt-2 leading-relaxed flex flex-wrap">
+        <div>
+          <p className="font-mono text-sm font-semibold">vndl</p>
+          <p className="font-mono text-xs text-muted-foreground">vncius' downloader</p>
+        </div>
+        <div className="mt-4 text-sm text-muted-foreground">
+          <Prompt cmd="cat ~/readme" />
+          <p className="mt-3">privacy-first focused video &amp; audio downloader</p>
+          <p className="mt-2 flex flex-wrap leading-relaxed">
             youtube
             <Dot />
             twitter/x
@@ -47,7 +49,15 @@ export function HomePage() {
           <span className="hidden sm:inline">
             <Dot />
           </span>
-          <span>built with yt-dlp</span>
+          <span>
+            built with{" "}
+            <a
+              className="text-primary underline underline-offset-3"
+              href="https://github.com/yt-dlp/yt-dlp"
+            >
+              yt-dlp
+            </a>
+          </span>
           <span className="hidden sm:inline">
             <Dot />
           </span>

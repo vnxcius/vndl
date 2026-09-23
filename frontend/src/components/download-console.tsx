@@ -22,6 +22,7 @@ import {
 import { formatBytes, formatDuration } from "@/lib/format";
 import { isNsfwUrl } from "@/lib/nsfw";
 import { cn } from "@/lib/utils";
+import { Prompt } from "./prompt";
 
 export function DownloadConsole() {
   const [url, setUrl] = useState("");
@@ -175,7 +176,7 @@ export function DownloadConsole() {
 
       {meta && (
         <section className="flex flex-col gap-4">
-          <Prompt cmd="probe_result" />
+          <Prompt cmd="result" />
           <a
             href={probeMutation.variables ?? url}
             target="_blank"
@@ -275,14 +276,6 @@ export function DownloadConsole() {
         </section>
       )}
     </div>
-  );
-}
-
-function Prompt({ cmd }: { cmd: string }) {
-  return (
-    <p className="text-xs text-muted-foreground">
-      <span className="text-green-600 dark:text-green-400">$</span> {cmd}
-    </p>
   );
 }
 
