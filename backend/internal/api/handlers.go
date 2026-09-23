@@ -99,7 +99,7 @@ func (s *Server) probe(w http.ResponseWriter, r *http.Request) {
 		meta, err = downloader.Probe(r.Context(), s.cfg, cleanURL)
 		if downloader.NeedsFxFallback(cleanURL, err) {
 			ev.Set("fallback", "fxtwitter")
-			if fxMeta, fxErr := downloader.ProbeFx(r.Context(), cleanURL); fxErr == nil {
+			if fxMeta, fxErr := downloader.ProbeFx(r.Context(), cleanURL, slog.With("endpoint", "probe")); fxErr == nil {
 				meta, err = fxMeta, nil
 			} else {
 				ev.Set("fallback_error", fxErr.Error())
@@ -308,7 +308,7 @@ func (s *Server) file(w http.ResponseWriter, r *http.Request) {
 	source, formatID := job.URL, job.FormatID
 	if downloader.IsFxFormat(formatID) && downloader.IsTwitterURL(source) {
 		ev.Set("fallback", "fxtwitter")
-		direct, err := downloader.ResolveFxURL(r.Context(), source, formatID)
+		direct, err := downloader.ResolveFxURL(r.Context(), source, formatID, slog.With("endpoint", "file", "job_id", job.ID))
 		if err != nil {
 			job.Fail(err.Error())
 			ev.Set("status", "error").Set("error", err.Error())

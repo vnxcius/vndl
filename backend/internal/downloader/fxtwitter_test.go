@@ -1,8 +1,11 @@
 package downloader
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -16,6 +19,8 @@ const fxSample = `{"code":200,"message":"OK","tweet":{"id":"2090883552552591439"
 {"url":"https://video.twimg.com/amplify_video/1/vid/avc1/480x812/c.mp4?tag=14","bitrate":950000,"content_type":"video/mp4"}]}]}}}`
 
 const tweetURL = "https://x.com/tomiie_x/status/2090883552552591439"
+
+var discard = slog.New(slog.NewTextHandler(io.Discard, nil))
 
 func fakeFx(t *testing.T, body string, failFirst int) *atomic.Int32 {
 	t.Helper()
@@ -33,6 +38,10 @@ func fakeFx(t *testing.T, body string, failFirst int) *atomic.Int32 {
 	}))
 	t.Cleanup(srv.Close)
 
+	fxCache.Lock()
+	fxCache.items = make(map[string]fxCacheEntry)
+	fxCache.Unlock()
+
 	oldBase, oldDelay := fxAPIBase, fxRetryDelay
 	fxAPIBase, fxRetryDelay = srv.URL, 0
 	t.Cleanup(func() { fxAPIBase, fxRetryDelay = oldBase, oldDelay })
@@ -42,9 +51,22 @@ func fakeFx(t *testing.T, body string, failFirst int) *atomic.Int32 {
 func TestProbeFxRetriesTransient404(t *testing.T) {
 	calls := fakeFx(t, fxSample, 1)
 
-	meta, err := ProbeFx(context.Background(), tweetURL)
+	var logs bytes.Buffer
+	meta, err := ProbeFx(context.Background(), tweetURL, slog.New(slog.NewJSONHandler(&logs, nil)))
 	if err != nil {
 		t.Fatalf("ProbeFx: %v", err)
+	}
+
+	out := logs.String()
+	for _, want := range []string{`"outcome":"retry"`, `"http_status":404`, `"outcome":"ok"`, `"msg":"fxtwitter.probe"`, `"formats":2`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("logs missing %s:\n%s", want, out)
+		}
+	}
+	for _, leak := range []string{"2090883552552591439", "twimg.com", "http://", "https://"} {
+		if strings.Contains(out, leak) {
+			t.Errorf("logs leak %q:\n%s", leak, out)
+		}
 	}
 	if calls.Load() != 2 {
 		t.Errorf("calls = %d, want 2 (one 404, one retry)", calls.Load())
@@ -64,18 +86,38 @@ func TestProbeFxRetriesTransient404(t *testing.T) {
 func TestResolveFxURLPicksVariantAndChecksHost(t *testing.T) {
 	fakeFx(t, fxSample, 0)
 
-	got, err := ResolveFxURL(context.Background(), tweetURL, "fx-632000")
+	got, err := ResolveFxURL(context.Background(), tweetURL, "fx-632000", discard)
 	if err != nil || !strings.Contains(got, "320x540") {
 		t.Errorf("fx-632000 -> %q, %v", got, err)
 	}
-	got, err = ResolveFxURL(context.Background(), tweetURL, "fx-1")
+	got, err = ResolveFxURL(context.Background(), tweetURL, "fx-1", discard)
 	if err != nil || !strings.Contains(got, "480x812") {
 		t.Errorf("unknown bitrate should fall back to highest, got %q, %v", got, err)
 	}
 
 	fakeFx(t, strings.ReplaceAll(fxSample, "video.twimg.com", "evil.example"), 0)
-	if _, err := ResolveFxURL(context.Background(), tweetURL, "fx-950000"); err == nil {
+	if _, err := ResolveFxURL(context.Background(), tweetURL, "fx-950000", discard); err == nil {
 		t.Error("expected a non-twimg media host to be rejected")
+	}
+}
+
+// Regression: a download's fresh lookup 404'd through every retry seconds
+// after its probe succeeded.
+func TestResolveFxURLReusesProbeLookup(t *testing.T) {
+	calls := fakeFx(t, fxSample, 0)
+
+	if _, err := ProbeFx(context.Background(), tweetURL, discard); err != nil {
+		t.Fatalf("ProbeFx: %v", err)
+	}
+	var logs bytes.Buffer
+	if _, err := ResolveFxURL(context.Background(), tweetURL, "fx-950000", slog.New(slog.NewJSONHandler(&logs, nil))); err != nil {
+		t.Fatalf("ResolveFxURL: %v", err)
+	}
+	if calls.Load() != 1 {
+		t.Errorf("fxtwitter calls = %d, want 1 (resolve should reuse the probe's lookup)", calls.Load())
+	}
+	if !strings.Contains(logs.String(), `"outcome":"cache_hit"`) {
+		t.Errorf("expected a cache_hit log line:\n%s", logs.String())
 	}
 }
 

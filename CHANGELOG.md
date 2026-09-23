@@ -11,7 +11,9 @@ versioning follows [Semantic Versioning](https://semver.org/).
 - Sensitive (age-restricted) tweets can now be downloaded. When yt-dlp
   can't see a tweet's video logged out, the server falls back to the
   public fxtwitter API — sending only the tweet ID, never the visitor's
-  IP — and downloads the video directly from Twitter's CDN.
+  IP — and downloads the video directly from Twitter's CDN. Each fxtwitter
+  request is logged (attempt, HTTP status, latency, outcome, formats,
+  picked quality) without the tweet ID or any URL.
 
 ## [1.10.1] - 2026-09-22
 
