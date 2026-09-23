@@ -4,6 +4,15 @@ All notable changes to this project are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [Semantic Versioning](https://semver.org/).
 
+## [1.11.0] - 2026-09-22
+
+### Added
+
+- Sensitive (age-restricted) tweets can now be downloaded. When yt-dlp
+  can't see a tweet's video logged out, the server falls back to the
+  public fxtwitter API — sending only the tweet ID, never the visitor's
+  IP — and downloads the video directly from Twitter's CDN.
+
 ## [1.10.1] - 2026-09-22
 
 ### Fixed

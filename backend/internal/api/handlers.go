@@ -97,6 +97,14 @@ func (s *Server) probe(w http.ResponseWriter, r *http.Request) {
 		ev.Set("cache", "miss")
 		var err error
 		meta, err = downloader.Probe(r.Context(), s.cfg, cleanURL)
+		if downloader.NeedsFxFallback(cleanURL, err) {
+			ev.Set("fallback", "fxtwitter")
+			if fxMeta, fxErr := downloader.ProbeFx(r.Context(), cleanURL); fxErr == nil {
+				meta, err = fxMeta, nil
+			} else {
+				ev.Set("fallback_error", fxErr.Error())
+			}
+		}
 		if err != nil {
 			ev.Set("status", "error").Set("error", err.Error())
 			// 422, not 5xx: Cloudflare replaces 5xx bodies with its own error page.
@@ -297,6 +305,19 @@ func (s *Server) file(w http.ResponseWriter, r *http.Request) {
 	}
 	defer os.RemoveAll(scratch)
 
+	source, formatID := job.URL, job.FormatID
+	if downloader.IsFxFormat(formatID) && downloader.IsTwitterURL(source) {
+		ev.Set("fallback", "fxtwitter")
+		direct, err := downloader.ResolveFxURL(r.Context(), source, formatID)
+		if err != nil {
+			job.Fail(err.Error())
+			ev.Set("status", "error").Set("error", err.Error())
+			writeError(w, http.StatusUnprocessableEntity, "could not resolve this tweet's video — try fetching it again")
+			return
+		}
+		source, formatID = direct, ""
+	}
+
 	// Released right after cmd.Wait() below, not deferred past file
 	// streaming — a slow client shouldn't pin a concurrency slot.
 	releaseSlot, err := s.cl.Acquire(r.Context())
@@ -313,7 +334,7 @@ func (s *Server) file(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	job.SetCancelFunc(cancel)
 
-	cmd := downloader.BuildDownloadCmd(ctx, s.cfg, job.URL, job.FormatID, job.AudioOnly, job.Container, scratch)
+	cmd := downloader.BuildDownloadCmd(ctx, s.cfg, source, formatID, job.AudioOnly, job.Container, scratch)
 
 	// Captured so a failure carries more detail than a bare "exit status 1".
 	var stderrBuf bytes.Buffer

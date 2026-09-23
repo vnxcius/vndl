@@ -121,8 +121,10 @@ export function DownloadConsole() {
       // Middle fallback matters: some platforms never have an m4a audio
       // track, so without it the selector collapses straight to bare
       // "bestaudio" — audio only, no video, silently.
+      // Audio-only still sends the selection: the backend ignores it for yt-dlp,
+      // but needs it to route fx- formats through the direct-URL fallback.
       format_id: audioOnly
-        ? ""
+        ? (selected?.format_id ?? "")
         : needsMerge
           ? isAvc
             ? `${selected!.format_id}+bestaudio[ext=m4a]/${selected!.format_id}+bestaudio/best`

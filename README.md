@@ -30,6 +30,10 @@ server-side — no database, no persisted files.
   processes, both in-memory, no external dependencies.
 - Successful `/probe` results are cached in memory for a few minutes so
   the same link isn't re-probed repeatedly.
+- Sensitive (age-restricted) tweets, which yt-dlp can't see logged out,
+  fall back to the public [fxtwitter](https://github.com/FxEmbed/FxEmbed)
+  API. Only the tweet ID is sent, from the server — never the visitor's IP
+  — and only when yt-dlp has already failed for that reason.
 - Only the platform host is ever logged (e.g. `www.youtube.com`) — never
   the URL or title. Logs are color-accented text on stdout by default
   (`LOG_FORMAT=json` for structured output instead).
