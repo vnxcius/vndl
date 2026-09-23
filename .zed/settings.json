@@ -1,0 +1,42 @@
+// Project-local Zed settings — see https://zed.dev/docs/configuring-zed
+//
+// The formatter command points at frontend/node_modules/.bin/oxfmt directly
+// (rather than the bare "oxfmt") because Zed doesn't consistently add a
+// project's node_modules/.bin to the external formatter's PATH — a bare
+// command name fails with "No such file or directory".
+{
+  "languages": {
+    "TypeScript": {
+      "formatter": {
+        "external": {
+          "command": "frontend/node_modules/.bin/oxfmt",
+          "arguments": ["--stdin-filepath", "{buffer_path}"]
+        }
+      }
+    },
+    "TSX": {
+      "formatter": {
+        "external": {
+          "command": "frontend/node_modules/.bin/oxfmt",
+          "arguments": ["--stdin-filepath", "{buffer_path}"]
+        }
+      }
+    },
+    "JavaScript": {
+      "formatter": {
+        "external": {
+          "command": "frontend/node_modules/.bin/oxfmt",
+          "arguments": ["--stdin-filepath", "{buffer_path}"]
+        }
+      }
+    },
+    "JSX": {
+      "formatter": {
+        "external": {
+          "command": "frontend/node_modules/.bin/oxfmt",
+          "arguments": ["--stdin-filepath", "{buffer_path}"]
+        }
+      }
+    }
+  }
+}

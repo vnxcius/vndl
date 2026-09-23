@@ -1,0 +1,11 @@
+# OS / editor
+.DS_Store
+.idea
+*.sw?
+
+# local env/compose overrides — see the corresponding .example files
+.env
+docker-compose.override.yml
+
+# bind-mounted backend log files (LOG_DIR in docker-compose.yml)
+/logs/

@@ -1,0 +1,34 @@
+# Pinned so CI and manual deploys always operate on the same project,
+# regardless of the invoking directory.
+name: vndl
+
+services:
+  backend:
+    build: ./backend
+    # Not published to the host — Caddy is the only intended entry point.
+    # The backend trusts X-Forwarded-For for rate limiting, which only
+    # holds if the backend port itself is never directly reachable. Need
+    # local debugging access? Add a docker-compose.override.yml instead.
+    environment:
+      PORT: "8080"
+      ALLOWED_ORIGINS: "http://localhost:5173,http://localhost:${FRONTEND_PORT:-8081}"
+      RATE_LIMIT_RPS: "1"
+      RATE_LIMIT_BURST: "5"
+      MAX_CONCURRENT_YTDLP: "6"
+      JOB_TTL: "5m"
+      LOG_DIR: "/var/log/vndl" # bind-mounted below to ./logs at the repo root
+      LOG_RETENTION_DAYS: "30"
+    volumes:
+      - ./logs:/var/log/vndl
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE: ""
+    ports:
+      - "${FRONTEND_PORT:-8081}:80"
+    depends_on:
+      - backend
+    restart: unless-stopped

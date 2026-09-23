@@ -1,0 +1,24 @@
+# Load-testing image: same server binary as production, but yt-dlp is
+# replaced with cmd/fakeytdlp — no python, no ffmpeg, no real network calls
+# to any video platform. See LOADTEST.md.
+
+FROM golang:1.26-alpine AS build
+WORKDIR /src
+COPY go.mod ./
+COPY . .
+RUN CGO_ENABLED=0 go build -o /out/server ./cmd/server && \
+    CGO_ENABLED=0 go build -o /out/fakeytdlp ./cmd/fakeytdlp
+
+FROM alpine:3.22
+RUN addgroup -S vndl && adduser -S vndl -G vndl
+COPY --from=build /out/server /usr/local/bin/server
+COPY --from=build /out/fakeytdlp /usr/local/bin/yt-dlp
+# fakeytdlp never actually invokes ffmpeg — this only needs to exist on
+# PATH so the server's own startup dependency check passes.
+RUN printf '#!/bin/sh\nexit 0\n' > /usr/local/bin/ffmpeg && chmod +x /usr/local/bin/ffmpeg
+
+USER vndl
+ENV PORT=8080
+ENV YTDLP_PATH=/usr/local/bin/yt-dlp
+EXPOSE 8080
+ENTRYPOINT ["server"]

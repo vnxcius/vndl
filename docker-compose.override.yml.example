@@ -1,0 +1,13 @@
+# Optional, local-only: re-exposes the backend directly on the host for
+# debugging (curl-ing it without going through the frontend/Caddy). Copy
+# to docker-compose.override.yml — Compose loads that automatically — and
+# it's gitignored so this never accidentally ships to production.
+#
+# Doing this defeats the backend's per-IP rate limiting (it trusts
+# X-Forwarded-For, which is only safe when Caddy is the sole entry point —
+# see the comment in docker-compose.yml). Fine for local debugging on your
+# own machine; don't do this on anything internet-facing.
+services:
+  backend:
+    ports:
+      - "${BACKEND_PORT:-8080}:8080"

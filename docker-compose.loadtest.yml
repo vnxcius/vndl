@@ -1,0 +1,42 @@
+name: vndl-loadtest
+
+# Standalone stack for load testing — completely separate from the real
+# app. The backend here runs cmd/fakeytdlp instead of real yt-dlp: no
+# request in any load test ever reaches YouTube/TikTok/etc. Caddy fronts
+# the backend the same way it does in production (docker-compose.yml) —
+# the backend's port is deliberately not published — so a load test
+# against this stack exercises the real trust boundary the app relies on,
+# not a shortcut around it. See loadtest/README.md.
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.loadtest
+    environment:
+      PORT: "8080"
+      ALLOWED_ORIGINS: "http://localhost:5173"
+      RATE_LIMIT_RPS: "${RATE_LIMIT_RPS:-1}"
+      RATE_LIMIT_BURST: "${RATE_LIMIT_BURST:-5}"
+      MAX_CONCURRENT_YTDLP: "${MAX_CONCURRENT_YTDLP:-6}"
+      JOB_TTL: "1m"
+      FAKE_YTDLP_DELAY_MS: "${FAKE_YTDLP_DELAY_MS:-40}"
+      FAKE_YTDLP_FILE_BYTES: "${FAKE_YTDLP_FILE_BYTES:-2000000}"
+
+  caddy:
+    image: caddy:2-alpine
+    volumes:
+      - ./loadtest/Caddyfile:/etc/caddy/Caddyfile:ro
+    ports:
+      - "18080:80"
+    depends_on:
+      - backend
+
+  # Direct backend access for the "raw ceiling" test only (k6-throughput.js
+  # targets this directly, bypassing Caddy on purpose, to measure the
+  # server's own capacity without a proxy hop in the way). k6-bot-attack.js
+  # targets caddy instead, to validate the trust boundary fix for real.
+  backend-direct:
+    extends:
+      service: backend
+    ports:
+      - "18081:8080"
