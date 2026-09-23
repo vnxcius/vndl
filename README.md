@@ -79,6 +79,11 @@ only serves plain HTTP.
 
 ### Configuration (env vars)
 
+Set these in a `.env` at the repo root (next to `docker-compose.yml`) —
+`.env.example` lists them all with their defaults. `PORT`, `LOG_DIR` and
+the binary paths are fixed in `docker-compose.yml`, since the image, Caddy
+and the log mount depend on them.
+
 | var | default | purpose |
 | --- | --- | --- |
 | `FRONTEND_PORT` | `8081` | host port for the frontend |
@@ -98,6 +103,7 @@ only serves plain HTTP.
 | `YTDLP_PATH` / `FFMPEG_PATH` | `yt-dlp` / auto | binary paths |
 | `LOG_FORMAT` | `text` | `text` or `json` |
 | `PROBE_CACHE_TTL` | `10m` | how long probe results are cached; `0` disables |
+| `LOGS_DIR` | `./logs` | host directory for log files (must be writable by UID 1000) |
 | `LOG_DIR` | *(empty = disabled)* | directory for dated log files; `docker-compose.yml` bind-mounts this to `./logs` |
 | `LOG_RETENTION_DAYS` | `30` | how many days of log files to keep before deleting |
 
