@@ -21,11 +21,15 @@ server-side — no database, no persisted files.
 - No database — job state lives in memory (`backend/internal/jobs`),
   keyed by a random ID, and expires a few minutes after the download
   finishes.
-- `POST /api/downloads` creates a job. The client opens an SSE stream
-  (`/events`) for live progress and requests `/file`, which starts
-  `yt-dlp`, writes to a per-job temp directory, streams the result back,
-  then deletes everything — nothing produced by yt-dlp is kept past that
-  one request.
+- `POST /api/downloads` creates a job and starts `yt-dlp` in the
+  background, independent of any request — the visitor can leave the tab
+  and come back. The client follows progress over SSE (`/events`,
+  reconnecting via `GET /api/downloads/{id}` if the stream drops) and,
+  once it's done, hands `/file` to the browser's own download manager,
+  which supports range requests so an interrupted transfer can resume.
+- Job files live in a per-job directory on a RAM-backed tmpfs
+  (`SCRATCH_SIZE`), never on disk, and are deleted `FILE_TTL` after the
+  download finishes (immediately if it fails), or on restart.
 - Per-IP rate limiting and a server-wide cap on concurrent yt-dlp/ffmpeg
   processes, both in-memory, no external dependencies.
 - Successful `/probe` results are cached in memory for a few minutes so
@@ -97,9 +101,11 @@ and the log mount depend on them.
 | `MAX_FILESIZE` | `2G` | yt-dlp `--max-filesize` |
 | `MAX_SSE_CONNECTIONS` | `512` | server-wide cap on progress streams; `0` disables |
 | `FRONTEND_BIND` | `127.0.0.1` | interface the frontend port is published on |
-| `BACKEND_MEM_LIMIT` / `BACKEND_CPUS` | `2g` / `2` | backend container limits |
+| `BACKEND_MEM_LIMIT` / `BACKEND_CPUS` | `4g` / `2` | backend container limits; memory must cover `SCRATCH_SIZE` plus ~1-2g |
+| `SCRATCH_SIZE` | `2g` | RAM-backed tmpfs for job files, shared by all jobs |
 | `CONCURRENCY_MAX_WAIT` | `15s` | max wait for a free slot over the cap |
-| `JOB_TTL` | `5m` | how long a finished job stays queryable |
+| `JOB_TTL` | `5m` | how long a failed or canceled job stays queryable |
+| `FILE_TTL` | `10m` | how long a finished file waits to be fetched before it's deleted |
 | `YTDLP_PATH` / `FFMPEG_PATH` | `yt-dlp` / auto | binary paths |
 | `LOG_FORMAT` | `text` | `text` or `json` |
 | `PROBE_CACHE_TTL` | `10m` | how long probe results are cached; `0` disables |

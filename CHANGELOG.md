@@ -4,6 +4,24 @@ All notable changes to this project are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- Downloads no longer need the tab kept open: yt-dlp runs in the
+  background on the server, and the finished file is handed to the
+  browser's own download manager (resumable via range requests) instead of
+  being buffered in the page. On mobile you can switch apps and come back;
+  the file saves when you return, for up to `FILE_TTL` (10 minutes).
+- Progress streams reconnect after the tab is frozen or the connection
+  drops; failures now show the specific reason.
+- Job files live on a RAM-backed tmpfs (`SCRATCH_SIZE`, 2 GB) instead of
+  disk; the backend memory limit default is now 4 GB to cover it.
+
+### Fixed
+
+- The UI no longer reports "saved" while the file is still transferring.
+
 ## [1.12.0] - 2026-09-22
 
 ### Security

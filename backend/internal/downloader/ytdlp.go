@@ -221,6 +221,7 @@ type ProgressEvent struct {
 	Total   string  `json:"total,omitempty"`
 	Speed   string  `json:"speed,omitempty"`
 	ETA     string  `json:"eta,omitempty"`
+	Error   string  `json:"error,omitempty"` // user-facing; only on status "error"
 }
 
 func ParseProgressLine(line string) (ProgressEvent, bool) {
@@ -305,6 +306,8 @@ func FriendlyError(raw string) string {
 		return "no video found at that link — if you're sure it has one, it may be age-restricted or region-locked content, which isn't supported yet"
 	case strings.Contains(lower, "http error 410"), strings.Contains(lower, "http error 403"):
 		return "the site refused to serve this video's file — downloads from it may be temporarily broken"
+	case strings.Contains(lower, "no space left on device"):
+		return "the server ran out of room for this file — try a lower quality, or again in a few minutes"
 	}
 	return genericProbeFailure
 }

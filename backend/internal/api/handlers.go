@@ -59,10 +59,8 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/health", s.health)
 	mux.Handle("POST /api/probe", s.expensive(s.probe))
 	mux.Handle("POST /api/downloads", s.rl.Middleware(http.HandlerFunc(s.createDownload)))
+	mux.Handle("GET /api/downloads/{id}", s.rl.Middleware(http.HandlerFunc(s.status)))
 	mux.Handle("GET /api/downloads/{id}/events", s.rl.Middleware(http.HandlerFunc(s.events)))
-	// Not wrapped in s.cl.Middleware — that would hold a concurrency slot for
-	// the whole response, including streaming to a slow client, long after
-	// yt-dlp has exited. file() acquires/releases the slot itself instead.
 	mux.Handle("GET /api/downloads/{id}/file", s.rl.Middleware(http.HandlerFunc(s.file)))
 	mux.Handle("POST /api/downloads/{id}/cancel", s.rl.Middleware(http.HandlerFunc(s.cancel)))
 	return mux
@@ -186,7 +184,24 @@ func (s *Server) createDownload(w http.ResponseWriter, r *http.Request) {
 		ext = container
 	}
 
+	releaseIP, ok := s.perIP.Acquire(middleware.ClientKey(r))
+	if !ok {
+		ev.Set("status", "error").Set("error", "per-ip job limit")
+		writeError(w, http.StatusTooManyRequests, "too many downloads in progress from your network — wait for one to finish")
+		return
+	}
+	releaseSlot, err := s.cl.Acquire(r.Context())
+	if err != nil {
+		releaseIP()
+		ev.Set("status", "error").Set("error", "at capacity")
+		writeError(w, http.StatusServiceUnavailable, "server is at capacity, try again shortly")
+		return
+	}
+
 	job := s.mgr.Create(cleanURL, req.FormatID, req.AudioOnly, title, ext, container)
+	s.mgr.Hold(job.ID)
+	go s.run(job, releaseIP, releaseSlot)
+
 	ev.Set("status", "ok").Set("job_id", job.ID)
 	writeJSON(w, http.StatusCreated, map[string]string{
 		"job_id":   job.ID,
@@ -239,7 +254,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 
 	if status, _ := job.Status(); status == jobs.StatusCompleted || status == jobs.StatusError || status == jobs.StatusCanceled {
-		writeSSE(w, downloader.ProgressEvent{Status: string(status)})
+		writeSSE(w, job.Event())
 		flusher.Flush()
 		return
 	}
@@ -268,6 +283,17 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// status lets a client whose progress stream dropped (e.g. a backgrounded
+// mobile tab) catch up on a job that ended meanwhile.
+func (s *Server) status(w http.ResponseWriter, r *http.Request) {
+	job, ok := s.mgr.Get(r.PathValue("id"))
+	if !ok {
+		writeError(w, http.StatusNotFound, "job not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, job.Event())
+}
+
 func writeSSE(w http.ResponseWriter, ev downloader.ProgressEvent) {
 	b, _ := json.Marshal(ev)
 	fmt.Fprintf(w, "data: %s\n\n", b)
@@ -294,87 +320,68 @@ func (s *Server) cancel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "canceled"})
 }
 
-func (s *Server) file(w http.ResponseWriter, r *http.Request) {
+// run produces job's file in the background, detached from any request, so
+// a client that backgrounds or closes its tab doesn't stop the download.
+// It owns both releases.
+func (s *Server) run(job *jobs.Job, releaseIP, releaseSlot func()) {
 	ev := logging.New().
-		Set("endpoint", "file").
-		Set("client_ip", middleware.ClientIP(r))
-	defer ev.Emit(r.Context(), slog.Default())
-
-	id := r.PathValue("id")
-	ev.Set("job_id", id)
-
-	job, ok := s.mgr.Get(id)
-	if !ok {
-		ev.Set("status", "error").Set("error", "job not found")
-		writeError(w, http.StatusNotFound, "job not found")
-		return
-	}
-	ev.Set("platform", hostOf(job.URL)).
+		Set("endpoint", "download").
+		Set("job_id", job.ID).
+		Set("platform", hostOf(job.URL)).
 		Set("format_id", job.FormatID).
 		Set("audio_only", job.AudioOnly)
-
-	// Checked before Claim so a rejected request doesn't burn the job.
-	releaseIP, ok := s.perIP.Acquire(middleware.ClientKey(r))
-	if !ok {
-		ev.Set("status", "error").Set("error", "per-ip job limit")
-		writeError(w, http.StatusTooManyRequests, "too many downloads in progress from your network — wait for one to finish")
-		return
-	}
+	defer ev.Emit(context.Background(), slog.Default())
 	defer releaseIP()
 
-	if !job.Claim() {
-		ev.Set("status", "error").Set("error", "already streaming")
-		writeError(w, http.StatusConflict, "this download has already been started")
-		return
-	}
-	defer s.mgr.ExpireAfter(job.ID, s.mgr.TTL())
-
-	if job.IsCanceled() {
-		ev.Set("status", "canceled")
-		writeError(w, statusClientClosedRequest, "download was canceled")
-		return
-	}
-
-	// Deleted before the handler returns — nothing here is ever persisted.
-	scratch, err := os.MkdirTemp("", "vndl-job-*")
-	if err != nil {
-		ev.Set("status", "error").Set("error", err.Error())
-		writeError(w, http.StatusInternalServerError, "failed to start download")
-		return
-	}
-	defer os.RemoveAll(scratch)
-
-	source, formatID, direct := job.URL, job.FormatID, false
-	if downloader.IsFxFormat(formatID) && downloader.IsTwitterURL(source) {
-		ev.Set("fallback", "fxtwitter")
-		mediaURL, err := downloader.ResolveFxURL(r.Context(), source, formatID, slog.With("endpoint", "file", "job_id", job.ID))
-		if err != nil {
-			job.Fail(err.Error())
-			ev.Set("status", "error").Set("error", err.Error())
-			writeError(w, http.StatusUnprocessableEntity, "could not resolve this tweet's video — try fetching it again")
-			return
-		}
-		source, formatID, direct = mediaURL, "", true
-	}
-
-	// Released right after cmd.Wait() below, not deferred past file
-	// streaming — a slow client shouldn't pin a concurrency slot.
-	releaseSlot, err := s.cl.Acquire(r.Context())
-	if err != nil {
-		ev.Set("status", "error").Set("error", "at capacity")
-		writeError(w, http.StatusServiceUnavailable, "server is at capacity, try again shortly")
-		return
-	}
 	var releaseOnce sync.Once
 	release := func() { releaseOnce.Do(releaseSlot) }
 	defer release()
 
-	ctx, cancel := context.WithCancel(r.Context())
+	ctx, cancel := context.WithCancel(context.Background())
 	if s.cfg.MaxJobDuration > 0 {
-		ctx, cancel = context.WithTimeout(r.Context(), s.cfg.MaxJobDuration)
+		ctx, cancel = context.WithTimeout(context.Background(), s.cfg.MaxJobDuration)
 	}
 	defer cancel()
 	job.SetCancelFunc(cancel)
+
+	completed := false
+	defer func() {
+		ttl := s.mgr.TTL()
+		if completed {
+			ttl = s.cfg.FileTTL
+		}
+		s.mgr.ExpireAfter(job.ID, ttl)
+	}()
+
+	if job.IsCanceled() {
+		ev.Set("status", "canceled")
+		return
+	}
+
+	// Kept past run only if the job completes; the job deletes it on expiry.
+	scratch, err := os.MkdirTemp("", "vndl-job-*")
+	if err != nil {
+		job.Fail("failed to start download")
+		ev.Set("status", "error").Set("error", err.Error())
+		return
+	}
+	defer func() {
+		if !completed {
+			os.RemoveAll(scratch)
+		}
+	}()
+
+	source, formatID, direct := job.URL, job.FormatID, false
+	if downloader.IsFxFormat(formatID) && downloader.IsTwitterURL(source) {
+		ev.Set("fallback", "fxtwitter")
+		mediaURL, err := downloader.ResolveFxURL(ctx, source, formatID, slog.With("endpoint", "download", "job_id", job.ID))
+		if err != nil {
+			job.Fail("could not resolve this tweet's video — try fetching it again")
+			ev.Set("status", "error").Set("error", err.Error())
+			return
+		}
+		source, formatID, direct = mediaURL, "", true
+	}
 
 	cmd := downloader.BuildDownloadCmd(ctx, s.cfg, source, formatID, job.AudioOnly, direct, job.Container, scratch)
 
@@ -384,15 +391,18 @@ func (s *Server) file(w http.ResponseWriter, r *http.Request) {
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		job.Fail("failed to start download")
 		ev.Set("status", "error").Set("error", err.Error())
-		writeError(w, http.StatusInternalServerError, "failed to start download")
 		return
 	}
 
 	if err := cmd.Start(); err != nil {
-		job.Fail("failed to start yt-dlp")
+		if job.IsCanceled() {
+			ev.Set("status", "canceled")
+			return
+		}
+		job.Fail("failed to start download")
 		ev.Set("status", "error").Set("error", err.Error())
-		writeError(w, http.StatusBadGateway, "failed to start download")
 		return
 	}
 
@@ -409,13 +419,11 @@ func (s *Server) file(w http.ResponseWriter, r *http.Request) {
 	if waitErr != nil {
 		if job.IsCanceled() {
 			ev.Set("status", "canceled")
-			writeError(w, statusClientClosedRequest, "download was canceled")
 			return
 		}
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			job.Fail("timed out")
+			job.Fail("this download took too long and was stopped — try a lower quality")
 			ev.Set("status", "error").Set("error", "job exceeded max duration")
-			writeError(w, http.StatusUnprocessableEntity, "this download took too long and was stopped — try a lower quality")
 			return
 		}
 		detail := strings.TrimSpace(stderrBuf.String())
@@ -423,55 +431,91 @@ func (s *Server) file(w http.ResponseWriter, r *http.Request) {
 		if detail != "" {
 			fullErr += ": " + detail
 		}
-		fullErr = downloader.ScrubError(fullErr)
-		job.Fail(fullErr)
-		ev.Set("status", "error").Set("error", fullErr)
-		writeError(w, http.StatusUnprocessableEntity, downloader.FriendlyError(detail)) // see probe()
+		job.Fail(downloader.FriendlyError(detail))
+		ev.Set("status", "error").Set("error", downloader.ScrubError(fullErr))
 		return
 	}
 
 	matches, _ := filepath.Glob(filepath.Join(scratch, "output.*"))
 	if len(matches) == 0 && tooLarge {
-		job.Fail("file too large")
+		job.Fail("this file is larger than the server allows (" + s.cfg.MaxFilesize + ") — try a lower quality")
 		ev.Set("status", "error").Set("error", "exceeds max filesize")
-		writeError(w, http.StatusUnprocessableEntity, "this file is larger than the server allows ("+s.cfg.MaxFilesize+") — try a lower quality")
 		return
 	}
 	if len(matches) != 1 {
-		job.Fail("unexpected output from yt-dlp")
+		job.Fail("download finished but produced no file")
 		ev.Set("status", "error").Set("error", fmt.Sprintf("expected 1 output file, found %d", len(matches)))
-		writeError(w, http.StatusInternalServerError, "download finished but produced no file")
 		return
 	}
 	resultPath := matches[0]
-	ext := strings.TrimPrefix(filepath.Ext(resultPath), ".")
+	if info, err := os.Stat(resultPath); err == nil {
+		ev.Set("bytes", info.Size())
+	}
 
-	f, err := os.Open(resultPath)
+	if !job.Complete(scratch, resultPath, strings.TrimPrefix(filepath.Ext(resultPath), ".")) {
+		ev.Set("status", "canceled")
+		return
+	}
+	completed = true
+	ev.Set("status", "ok")
+}
+
+// file serves a finished job's result. Range requests are supported, so the
+// browser's own download manager can resume an interrupted transfer, and it
+// can be fetched more than once until the job expires.
+func (s *Server) file(w http.ResponseWriter, r *http.Request) {
+	ev := logging.New().
+		Set("endpoint", "file").
+		Set("client_ip", middleware.ClientIP(r))
+	defer ev.Emit(r.Context(), slog.Default())
+
+	id := r.PathValue("id")
+	ev.Set("job_id", id)
+
+	job, ok := s.mgr.Get(id)
+	if !ok {
+		ev.Set("status", "error").Set("error", "job not found")
+		writeError(w, http.StatusNotFound, "this download has expired — start it again")
+		return
+	}
+	ev.Set("platform", hostOf(job.URL))
+
+	path, ext, ok := job.Result()
+	if !ok {
+		switch status, msg := job.Status(); status {
+		case jobs.StatusError:
+			ev.Set("status", "error").Set("error", "job failed")
+			writeError(w, http.StatusUnprocessableEntity, msg)
+		case jobs.StatusCanceled:
+			ev.Set("status", "canceled")
+			writeError(w, statusClientClosedRequest, "download was canceled")
+		default:
+			ev.Set("status", "error").Set("error", "not ready")
+			writeError(w, http.StatusConflict, "this download isn't ready yet")
+		}
+		return
+	}
+
+	// An expiry can delete the file between Result and here; an already open
+	// file stays readable after that, so a transfer in progress is unaffected.
+	f, err := os.Open(path)
 	if err != nil {
-		job.Fail(err.Error())
+		ev.Set("status", "error").Set("error", "file gone")
+		writeError(w, http.StatusNotFound, "this download has expired — start it again")
+		return
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
 		ev.Set("status", "error").Set("error", err.Error())
 		writeError(w, http.StatusInternalServerError, "failed to read finished download")
 		return
 	}
-	defer f.Close()
-
-	info, statErr := f.Stat()
-
-	job.SetStatus(jobs.StatusCompleted)
-	job.Publish(downloader.ProgressEvent{Status: "done"})
 
 	w.Header().Set("Content-Type", downloader.ContentType(ext))
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.%s"`, job.Title, ext))
-	if statErr == nil {
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", info.Size()))
-	}
-	w.WriteHeader(http.StatusOK)
-
-	written, copyErr := io.Copy(w, f)
-	ev.Set("bytes_streamed", written).Set("status", "ok")
-	if copyErr != nil {
-		ev.Set("client_disconnected", true)
-	}
+	http.ServeContent(w, r, "", info.ModTime(), f)
+	ev.Set("status", "ok").Set("range", r.Header.Get("Range") != "")
 }
 
 const progressLogInterval = 5 * time.Second // plus always on phase change

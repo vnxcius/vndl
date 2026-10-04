@@ -20,12 +20,21 @@ export interface Metadata {
 }
 
 export interface ProgressEvent {
-  status: "downloading" | "processing" | "done" | "error" | "canceled";
+  // "expired" is client-side only: the job is gone from the server.
+  status: "downloading" | "processing" | "done" | "error" | "canceled" | "expired";
   percent?: number;
   total?: string;
   speed?: string;
   eta?: string;
+  error?: string;
 }
+
+export const terminalStatuses: ReadonlySet<ProgressEvent["status"]> = new Set([
+  "done",
+  "error",
+  "canceled",
+  "expired",
+]);
 
 export interface CreateDownloadInput {
   url: string;
@@ -88,21 +97,20 @@ export async function cancelDownload(jobId: string): Promise<void> {
   await fetch(downloadCancelUrl(jobId), { method: "POST" });
 }
 
-// Fetches first (rather than an <a download> straight to /file) so an
-// error/cancellation's JSON body isn't saved as if it were the file.
-export async function fetchAndSaveFile(
-  jobId: string,
-  filename: string,
-  signal?: AbortSignal,
-): Promise<void> {
-  const res = await fetch(downloadFileUrl(jobId), { signal });
+// Returns null once the job has expired on the server.
+export async function getDownloadStatus(jobId: string): Promise<ProgressEvent | null> {
+  const res = await fetch(`${API_BASE}/api/downloads/${jobId}`);
+  if (res.status === 404) return null;
   if (!res.ok) throw new ApiError(await readError(res));
+  return res.json() as Promise<ProgressEvent>;
+}
 
-  const blob = await res.blob();
-  const objectUrl = URL.createObjectURL(blob);
+// A plain link rather than fetch-to-blob: the browser's own download manager
+// takes over the transfer, so it survives the tab being backgrounded and can
+// resume. Only called once the job is done, so an error body isn't saved.
+export function saveFile(jobId: string): void {
   const a = document.createElement("a");
-  a.href = objectUrl;
-  a.download = filename;
+  a.href = downloadFileUrl(jobId);
+  a.download = ""; // filename comes from the server's Content-Disposition
   a.click();
-  URL.revokeObjectURL(objectUrl);
 }

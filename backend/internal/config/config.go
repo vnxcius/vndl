@@ -16,6 +16,7 @@ type Config struct {
 	MaxConcurrentYtDlp int
 	ConcurrencyMaxWait time.Duration
 	JobTTL             time.Duration
+	FileTTL            time.Duration
 	YtDlpPath          string
 	FfmpegPath         string
 	LogFormat          string
@@ -37,6 +38,7 @@ func Load() Config {
 		MaxConcurrentYtDlp: getEnvInt("MAX_CONCURRENT_YTDLP", 6), // server-wide, on top of per-IP limiting
 		ConcurrencyMaxWait: getEnvDuration("CONCURRENCY_MAX_WAIT", 15*time.Second),
 		JobTTL:             getEnvDuration("JOB_TTL", 5*time.Minute),
+		FileTTL:            getEnvDuration("FILE_TTL", 10*time.Minute), // how long a finished file waits to be fetched
 		YtDlpPath:          getEnv("YTDLP_PATH", "yt-dlp"),
 		FfmpegPath:         getEnv("FFMPEG_PATH", ""), // empty = let yt-dlp find it on PATH
 		LogFormat:          getEnv("LOG_FORMAT", "text"),
@@ -45,7 +47,7 @@ func Load() Config {
 		LogRetentionDays:   getEnvInt("LOG_RETENTION_DAYS", 30),
 		MaxJobDuration:     getEnvDuration("MAX_JOB_DURATION", 30*time.Minute), // 0 = no limit
 		MaxFilesize:        getEnv("MAX_FILESIZE", "2G"),                       // yt-dlp --max-filesize syntax
-		MaxJobsPerIP:       getEnvInt("MAX_JOBS_PER_IP", 2),                    // concurrent /file per client; 0 = no limit
+		MaxJobsPerIP:       getEnvInt("MAX_JOBS_PER_IP", 2),                    // concurrent downloads per client; 0 = no limit
 		MaxSSEConnections:  getEnvInt("MAX_SSE_CONNECTIONS", 512),              // server-wide; 0 = no limit
 	}
 }
@@ -111,6 +113,7 @@ func (c Config) LogArgs() []any {
 		"MAX_FILESIZE", c.MaxFilesize,
 		"MAX_SSE_CONNECTIONS", c.MaxSSEConnections,
 		"JOB_TTL", c.JobTTL.String(),
+		"FILE_TTL", c.FileTTL.String(),
 		"PROBE_CACHE_TTL", c.ProbeCacheTTL.String(),
 		"YTDLP_PATH", c.YtDlpPath,
 		"FFMPEG_PATH", c.FfmpegPath,

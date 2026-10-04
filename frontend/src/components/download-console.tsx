@@ -14,9 +14,10 @@ import { useNsfwMode } from "@/hooks/use-nsfw-mode";
 import {
   cancelDownload,
   createDownload,
-  downloadCancelUrl,
-  fetchAndSaveFile,
+  downloadFileUrl,
   probe,
+  saveFile,
+  terminalStatuses,
   type Format,
 } from "@/lib/api";
 import { formatBytes, formatDuration } from "@/lib/format";
@@ -30,7 +31,7 @@ export function DownloadConsole() {
   const [formatId, setFormatId] = useState<string | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
   const [nsfwBlocked, setNsfwBlocked] = useState(false);
-  const fileAbortRef = useRef<AbortController | null>(null);
+  const savedJobRef = useRef<string | null>(null);
   const { enabled: nsfwMode } = useNsfwMode();
 
   const probeMutation = useMutation({
@@ -42,20 +43,9 @@ export function DownloadConsole() {
     },
   });
 
-  const fileMutation = useMutation({
-    mutationFn: ({ jobId, filename }: { jobId: string; filename: string }) => {
-      const controller = new AbortController();
-      fileAbortRef.current = controller;
-      return fetchAndSaveFile(jobId, filename, controller.signal);
-    },
-  });
-
   const downloadMutation = useMutation({
     mutationFn: createDownload,
-    onSuccess: (result) => {
-      setJobId(result.job_id);
-      fileMutation.mutate({ jobId: result.job_id, filename: result.filename });
-    },
+    onSuccess: (result) => setJobId(result.job_id),
   });
 
   const cancelMutation = useMutation({ mutationFn: cancelDownload });
@@ -66,21 +56,23 @@ export function DownloadConsole() {
   const selected = videoFormats.find((f) => f.format_id === formatId);
 
   const isBusy = probeMutation.isPending || downloadMutation.isPending;
-  const isDownloading =
-    jobId !== null &&
-    progress?.status !== "done" &&
-    progress?.status !== "error" &&
-    progress?.status !== "canceled";
+  const isDownloading = jobId !== null && !(progress && terminalStatuses.has(progress.status));
 
-  // sendBeacon survives the page actually being torn down, unlike fetch.
+  // The job keeps running server-side while the tab is away; the file is
+  // handed to the browser once it's ready and the tab is in front, since a
+  // hidden tab's download may be ignored.
+  const isReady = progress?.status === "done";
   useEffect(() => {
-    if (!jobId || !isDownloading) return;
-    function cancelOnUnload() {
-      navigator.sendBeacon(downloadCancelUrl(jobId!));
+    if (!jobId || !isReady || savedJobRef.current === jobId) return;
+    function save() {
+      if (document.visibilityState !== "visible" || savedJobRef.current === jobId) return;
+      savedJobRef.current = jobId;
+      saveFile(jobId!);
     }
-    window.addEventListener("pagehide", cancelOnUnload);
-    return () => window.removeEventListener("pagehide", cancelOnUnload);
-  }, [jobId, isDownloading]);
+    save();
+    document.addEventListener("visibilitychange", save);
+    return () => document.removeEventListener("visibilitychange", save);
+  }, [jobId, isReady]);
 
   async function handlePaste() {
     try {
@@ -139,7 +131,6 @@ export function DownloadConsole() {
 
   function handleCancel() {
     if (!jobId) return;
-    fileAbortRef.current?.abort();
     cancelMutation.mutate(jobId);
   }
 
@@ -259,11 +250,18 @@ export function DownloadConsole() {
         <section className="flex flex-col gap-3">
           <Prompt cmd="status" />
           <ProgressReadout
+            jobId={jobId}
             status={progress?.status}
             percent={progress?.percent}
             speed={progress?.speed}
             eta={progress?.eta}
+            error={progress?.error}
           />
+          {isDownloading && (
+            <p className="text-xs text-muted-foreground">
+              you can leave this page — the file saves when you come back
+            </p>
+          )}
           {isDownloading && (
             <TermButton
               onClick={handleCancel}
@@ -302,26 +300,36 @@ function TermButton({ className, children, ...props }: ButtonHTMLAttributes<HTML
 }
 
 function ProgressReadout({
+  jobId,
   status,
   percent,
   speed,
   eta,
+  error,
 }: {
+  jobId: string;
   status?: string;
   percent?: number;
   speed?: string;
   eta?: string;
+  error?: string;
 }) {
   if (status === "error") {
-    return <ErrorLine>the download failed — try another format</ErrorLine>;
+    return <ErrorLine>{error || "the download failed — try another format"}</ErrorLine>;
   }
   if (status === "canceled") {
     return <p className="text-sm text-muted-foreground">canceled</p>;
   }
+  if (status === "expired") {
+    return <ErrorLine>this download expired — start it again</ErrorLine>;
+  }
   if (status === "done") {
     return (
       <p className="text-sm text-green-600 dark:text-green-500">
-        ok — saved, check your browser downloads
+        ok — saving, check your browser downloads{" "}
+        <a href={downloadFileUrl(jobId)} download className="underline hover:no-underline">
+          [save again]
+        </a>
       </p>
     );
   }
