@@ -21,15 +21,19 @@ server-side — no database, no persisted files.
 - No database — job state lives in memory (`backend/internal/jobs`),
   keyed by a random ID, and expires a few minutes after the download
   finishes.
-- `POST /api/downloads` creates a job and starts `yt-dlp` in the
-  background, independent of any request — the visitor can leave the tab
-  and come back. The client follows progress over SSE (`/events`,
-  reconnecting via `GET /api/downloads/{id}` if the stream drops) and,
-  once it's done, hands `/file` to the browser's own download manager,
-  which supports range requests so an interrupted transfer can resume.
-- Job files live in a per-job directory on a RAM-backed tmpfs
-  (`SCRATCH_SIZE`), never on disk, and are deleted `FILE_TTL` after the
-  download finishes (immediately if it fails), or on restart.
+- `POST /api/downloads` creates a job, and the page immediately hands
+  `/file` to the browser's own download manager, so the download carries
+  on with the tab backgrounded or closed. `/file` streams the result as
+  it's produced: `yt-dlp -o -` straight through for a single format, or
+  two `yt-dlp` processes piped into `ffmpeg -c copy` for a video+audio
+  merge (fragmented MP4, or MKV for VP9/AV1). Bytes start within seconds,
+  so nothing sits idle behind Cloudflare's 100s timeout. A failure before
+  the first byte is an HTTP error (the browser shows a failed download);
+  after it, the connection is aborted so a truncated file is never kept
+  as complete. The page follows progress over SSE (`/events`,
+  reconnecting via `GET /api/downloads/{id}` if the tab was frozen).
+- Nothing is written to disk: the only temp files, an mp3's source audio
+  while it's converted, live on a RAM-backed tmpfs (`SCRATCH_SIZE`).
 - Per-IP rate limiting and a server-wide cap on concurrent yt-dlp/ffmpeg
   processes, both in-memory, no external dependencies.
 - Successful `/probe` results are cached in memory for a few minutes so
@@ -95,17 +99,16 @@ and the log mount depend on them.
 | `PORT` | `8080` | backend listen port inside its container |
 | `ALLOWED_ORIGINS` | `http://localhost:5173` | CORS allow-list |
 | `RATE_LIMIT_RPS` / `RATE_LIMIT_BURST` | `1` / `5` | per-IP token bucket |
-| `MAX_CONCURRENT_YTDLP` | `6` | server-wide cap on concurrent yt-dlp/ffmpeg processes |
+| `MAX_CONCURRENT_YTDLP` | `6` | server-wide cap on concurrent downloads, each held until its last byte is sent |
 | `MAX_JOBS_PER_IP` | `2` | concurrent downloads per client (IPv6 grouped by /64); `0` disables |
-| `MAX_JOB_DURATION` | `30m` | a download running longer is stopped; `0` disables |
+| `MAX_JOB_DURATION` | `2h` | a download (including the transfer to the client) running longer is stopped; `0` disables |
 | `MAX_FILESIZE` | `2G` | yt-dlp `--max-filesize` |
 | `MAX_SSE_CONNECTIONS` | `512` | server-wide cap on progress streams; `0` disables |
 | `FRONTEND_BIND` | `127.0.0.1` | interface the frontend port is published on |
-| `BACKEND_MEM_LIMIT` / `BACKEND_CPUS` | `4g` / `2` | backend container limits; memory must cover `SCRATCH_SIZE` plus ~1-2g |
-| `SCRATCH_SIZE` | `2g` | RAM-backed tmpfs for job files, shared by all jobs |
+| `BACKEND_MEM_LIMIT` / `BACKEND_CPUS` | `2g` / `2` | backend container limits; memory includes `SCRATCH_SIZE` |
+| `SCRATCH_SIZE` | `512m` | RAM-backed tmpfs for mp3 source audio, shared by all jobs |
 | `CONCURRENCY_MAX_WAIT` | `15s` | max wait for a free slot over the cap |
-| `JOB_TTL` | `5m` | how long a failed or canceled job stays queryable |
-| `FILE_TTL` | `10m` | how long a finished file waits to be fetched before it's deleted |
+| `JOB_TTL` | `5m` | how long a job stays queryable, and a failed download retryable |
 | `YTDLP_PATH` / `FFMPEG_PATH` | `yt-dlp` / auto | binary paths |
 | `LOG_FORMAT` | `text` | `text` or `json` |
 | `PROBE_CACHE_TTL` | `10m` | how long probe results are cached; `0` disables |

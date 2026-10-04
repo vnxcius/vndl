@@ -23,7 +23,7 @@ func (m *Manager) Create(url, formatID string, audioOnly bool, title, ext, conta
 	m.mu.Lock()
 	m.jobs[j.ID] = j
 	m.mu.Unlock()
-	// Bounds jobs that never start; whoever runs the job calls Hold, then
+	// Bounds jobs that never start; /file calls Hold while streaming, then
 	// ExpireAfter again once it ends.
 	m.ExpireAfter(j.ID, m.cfg.JobTTL)
 	return j
@@ -36,8 +36,7 @@ func (m *Manager) Get(id string) (*Job, bool) {
 	return j, ok
 }
 
-// ExpireAfter replaces any earlier expiry for id. An expired job is
-// forgotten and its finished file deleted.
+// ExpireAfter replaces any earlier expiry for id.
 func (m *Manager) ExpireAfter(id string, d time.Duration) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -70,13 +69,9 @@ func (m *Manager) expire(id string, t **time.Timer) {
 		m.mu.Unlock()
 		return
 	}
-	j := m.jobs[id]
 	delete(m.jobs, id)
 	delete(m.timers, id)
 	m.mu.Unlock()
-	if j != nil {
-		j.removeScratch()
-	}
 }
 
 func (m *Manager) TTL() time.Duration {

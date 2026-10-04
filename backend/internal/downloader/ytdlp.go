@@ -130,13 +130,10 @@ func Probe(ctx context.Context, cfg config.Config, rawURL string) (*Metadata, er
 	return &meta, nil
 }
 
-// BuildDownloadCmd writes to outDir as "output.<ext>" rather than piping to
-// stdout — yt-dlp/ffmpeg silently skip merging/transcoding when writing to
-// a pipe. Caller deletes outDir after serving the result. container only
-// applies when merging separate streams; ignored for progressive formats
-// and audioOnly. direct marks a server-resolved media URL (fxtwitter),
-// the only case allowed through the generic extractor.
-func BuildDownloadCmd(ctx context.Context, cfg config.Config, rawURL, formatID string, audioOnly, direct bool, container, outDir string) *exec.Cmd {
+// ytDlpArgs are the flags shared by every download invocation. direct marks
+// a server-resolved media URL (fxtwitter), the only case allowed through the
+// generic extractor.
+func ytDlpArgs(cfg config.Config, format string, direct bool) []string {
 	extractors := siteExtractors
 	if direct {
 		extractors = directExtractors
@@ -151,22 +148,23 @@ func BuildDownloadCmd(ctx context.Context, cfg config.Config, rawURL, formatID s
 	if cfg.FfmpegPath != "" {
 		args = append(args, "--ffmpeg-location", cfg.FfmpegPath)
 	}
+	return append(args, "-f", format)
+}
 
-	if audioOnly {
-		args = append(args, "-f", "bestaudio/best", "-x", "--audio-format", "mp3")
-	} else {
-		f := formatID
-		if f == "" {
-			f = "bestvideo+bestaudio/best"
-		}
-		if container == "" {
-			container = "mkv"
-		}
-		args = append(args, "-f", f, "--merge-output-format", container)
-	}
+// BuildStreamCmd writes a single format to stdout as it downloads, with
+// progress on stderr. yt-dlp can't merge or transcode into a pipe, so
+// format must not combine streams ("a+b") — see SplitMergeFormat.
+func BuildStreamCmd(ctx context.Context, cfg config.Config, rawURL, format string, direct bool) *exec.Cmd {
+	args := append(ytDlpArgs(cfg, format, direct), "-o", "-", "--", rawURL)
+	cmd := exec.CommandContext(ctx, cfg.YtDlpPath, args...)
+	killGroupOnCancel(cmd)
+	return cmd
+}
 
-	args = append(args, "-o", filepath.Join(outDir, "output.%(ext)s"), "--", rawURL)
-
+// BuildDownloadCmd writes format to outDir as "input.<ext>", with progress
+// on stdout.
+func BuildDownloadCmd(ctx context.Context, cfg config.Config, rawURL, format string, direct bool, outDir string) *exec.Cmd {
+	args := append(ytDlpArgs(cfg, format, direct), "-o", filepath.Join(outDir, "input.%(ext)s"), "--", rawURL)
 	cmd := exec.CommandContext(ctx, cfg.YtDlpPath, args...)
 	killGroupOnCancel(cmd)
 	return cmd

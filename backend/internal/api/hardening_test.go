@@ -39,24 +39,23 @@ func serverWith(cfg config.Config) (*Server, http.Handler) {
 	return s, s.Routes()
 }
 
-func noop() {}
-
 // Audit #2 VNDL-001/007: a job past MAX_JOB_DURATION is stopped, and so is
 // every process yt-dlp spawned.
-func TestRunStopsJobAndChildrenAtMaxDuration(t *testing.T) {
+func TestFileStopsJobAndChildrenAtMaxDuration(t *testing.T) {
 	pidFile := filepath.Join(t.TempDir(), "child.pid")
 	bin := fakeYtDlp(t, "sleep 30 &\necho $! > "+pidFile+"\nwait")
-	s, _ := serverWith(config.Config{YtDlpPath: bin, MaxJobDuration: 300 * time.Millisecond})
-	job := s.mgr.Create("https://www.youtube.com/watch?v=x", "", false, "t", "mkv", "mkv")
+	s, h := serverWith(config.Config{YtDlpPath: bin, MaxJobDuration: 300 * time.Millisecond})
+	job := s.mgr.Create("https://www.youtube.com/watch?v=x", "18", false, "t", "mp4", "mp4")
 
 	start := time.Now()
-	s.run(job, noop, noop)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/api/downloads/"+job.ID+"/file", nil))
 
 	if elapsed := time.Since(start); elapsed > 3*time.Second {
-		t.Fatalf("run took %v, want it stopped near the 300ms limit", elapsed)
+		t.Fatalf("/file took %v, want it stopped near the 300ms limit", elapsed)
 	}
-	if status, msg := job.Status(); status != jobs.StatusError || !strings.Contains(msg, "too long") {
-		t.Errorf("got %s %q", status, msg)
+	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "too long") {
+		t.Errorf("got %d %s", w.Code, w.Body.String())
 	}
 	raw, err := os.ReadFile(pidFile)
 	if err != nil {
@@ -72,17 +71,18 @@ func TestRunStopsJobAndChildrenAtMaxDuration(t *testing.T) {
 
 // Audit #2 VNDL-005: yt-dlp's stderr carries the content ID; it must not
 // reach the logs.
-func TestRunErrorLogOmitsContentID(t *testing.T) {
+func TestFileErrorLogOmitsContentID(t *testing.T) {
 	bin := fakeYtDlp(t, "echo 'ERROR: [youtube] ABCDEFGHIJK: Video unavailable' >&2\nexit 1")
-	s, _ := serverWith(config.Config{YtDlpPath: bin})
-	job := s.mgr.Create("https://www.youtube.com/watch?v=ABCDEFGHIJK", "", false, "t", "mkv", "mkv")
+	s, h := serverWith(config.Config{YtDlpPath: bin})
+	job := s.mgr.Create("https://www.youtube.com/watch?v=ABCDEFGHIJK", "18", false, "t", "mp4", "mp4")
 
 	var logs bytes.Buffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
 	defer slog.SetDefault(prev)
 
-	s.run(job, noop, noop)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/api/downloads/"+job.ID+"/file", nil))
 
 	if !strings.Contains(logs.String(), "Video unavailable") {
 		t.Fatalf("expected the error to be logged:\n%s", logs.String())
@@ -90,8 +90,8 @@ func TestRunErrorLogOmitsContentID(t *testing.T) {
 	if strings.Contains(logs.String(), "ABCDEFGHIJK") {
 		t.Errorf("logs leak the content ID:\n%s", logs.String())
 	}
-	if _, msg := job.Status(); !strings.Contains(msg, "unavailable") {
-		t.Errorf("client should still get the friendly message, got %q", msg)
+	if !strings.Contains(w.Body.String(), "unavailable") {
+		t.Errorf("client should still get the friendly message, got %s", w.Body.String())
 	}
 }
 

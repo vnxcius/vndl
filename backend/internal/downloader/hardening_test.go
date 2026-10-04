@@ -2,6 +2,7 @@ package downloader
 
 import (
 	"context"
+	"os/exec"
 	"slices"
 	"strings"
 	"testing"
@@ -21,27 +22,37 @@ func argAfter(args []string, flag string) string {
 func TestBuildDownloadCmdHardening(t *testing.T) {
 	cfg := config.Config{YtDlpPath: "yt-dlp", MaxFilesize: "2G"}
 	const url = "https://www.youtube.com/playlist?list=x"
-	args := BuildDownloadCmd(context.Background(), cfg, url, "", false, false, "mkv", t.TempDir()).Args
+	builders := map[string]func(rawURL string, direct bool) *exec.Cmd{
+		"stream": func(rawURL string, direct bool) *exec.Cmd {
+			return BuildStreamCmd(context.Background(), cfg, rawURL, "18", direct)
+		},
+		"download": func(rawURL string, direct bool) *exec.Cmd {
+			return BuildDownloadCmd(context.Background(), cfg, rawURL, "bestaudio", direct, t.TempDir())
+		},
+	}
+	for name, build := range builders {
+		args := build(url, false).Args
 
-	for flag, want := range map[string]string{
-		"--use-extractors": siteExtractors,
-		"--playlist-items": "1",
-		"--max-filesize":   "2G",
-	} {
-		if got := argAfter(args, flag); got != want {
-			t.Errorf("%s = %q, want %q", flag, got, want)
+		for flag, want := range map[string]string{
+			"--use-extractors": siteExtractors,
+			"--playlist-items": "1",
+			"--max-filesize":   "2G",
+		} {
+			if got := argAfter(args, flag); got != want {
+				t.Errorf("%s: %s = %q, want %q", name, flag, got, want)
+			}
 		}
-	}
-	if !slices.Contains(args, "--ignore-config") {
-		t.Error("missing --ignore-config")
-	}
-	if n := len(args); args[n-2] != "--" || args[n-1] != url {
-		t.Errorf("URL must follow \"--\" at the end of argv, got %q", args[n-2:])
-	}
+		if !slices.Contains(args, "--ignore-config") {
+			t.Errorf("%s: missing --ignore-config", name)
+		}
+		if n := len(args); args[n-2] != "--" || args[n-1] != url {
+			t.Errorf("%s: URL must follow \"--\" at the end of argv, got %q", name, args[n-2:])
+		}
 
-	direct := BuildDownloadCmd(context.Background(), cfg, "https://video.twimg.com/a.mp4", "", false, true, "mkv", t.TempDir()).Args
-	if got := argAfter(direct, "--use-extractors"); got != directExtractors {
-		t.Errorf("direct download extractors = %q, want %q", got, directExtractors)
+		direct := build("https://video.twimg.com/a.mp4", true).Args
+		if got := argAfter(direct, "--use-extractors"); got != directExtractors {
+			t.Errorf("%s: direct download extractors = %q, want %q", name, got, directExtractors)
+		}
 	}
 }
 

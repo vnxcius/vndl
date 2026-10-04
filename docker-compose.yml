@@ -18,27 +18,26 @@ services:
       MAX_CONCURRENT_YTDLP: "${MAX_CONCURRENT_YTDLP:-6}"
       CONCURRENCY_MAX_WAIT: "${CONCURRENCY_MAX_WAIT:-15s}"
       MAX_JOBS_PER_IP: "${MAX_JOBS_PER_IP:-2}"
-      MAX_JOB_DURATION: "${MAX_JOB_DURATION:-30m}"
+      MAX_JOB_DURATION: "${MAX_JOB_DURATION:-2h}"
       MAX_FILESIZE: "${MAX_FILESIZE:-2G}"
       MAX_SSE_CONNECTIONS: "${MAX_SSE_CONNECTIONS:-512}"
       JOB_TTL: "${JOB_TTL:-5m}"
-      FILE_TTL: "${FILE_TTL:-10m}"
       PROBE_CACHE_TTL: "${PROBE_CACHE_TTL:-10m}"
       LOG_FORMAT: "${LOG_FORMAT:-text}"
       LOG_DIR: "/var/log/vndl" # fixed: container side of the LOGS_DIR mount below
       LOG_RETENTION_DAYS: "${LOG_RETENTION_DAYS:-30}"
     volumes:
       - ${LOGS_DIR:-./logs}:/var/log/vndl
-    # Job scratch dirs live in RAM, so downloads never touch the host disk and
-    # are gone on restart. Counts against mem_limit: keep it SCRATCH_SIZE plus
-    # ~1-2g for yt-dlp/ffmpeg, or a full scratch gets the container OOM-killed.
+    # Downloads stream straight to the client; the only temp files are an mp3's
+    # source audio. Kept in RAM so nothing touches the host disk, and counted
+    # against mem_limit.
     tmpfs:
-      - /tmp:size=${SCRATCH_SIZE:-2g},mode=1777
+      - /tmp:size=${SCRATCH_SIZE:-512m},mode=1777
     init: true # reaps yt-dlp/ffmpeg children the server doesn't wait on
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     pids_limit: 256
-    mem_limit: ${BACKEND_MEM_LIMIT:-4g}
+    mem_limit: ${BACKEND_MEM_LIMIT:-2g}
     cpus: ${BACKEND_CPUS:-2}
     restart: unless-stopped
 

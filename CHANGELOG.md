@@ -8,19 +8,26 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- Downloads no longer need the tab kept open: yt-dlp runs in the
-  background on the server, and the finished file is handed to the
-  browser's own download manager (resumable via range requests) instead of
-  being buffered in the page. On mobile you can switch apps and come back;
-  the file saves when you return, for up to `FILE_TTL` (10 minutes).
-- Progress streams reconnect after the tab is frozen or the connection
-  drops; failures now show the specific reason.
-- Job files live on a RAM-backed tmpfs (`SCRATCH_SIZE`, 2 GB) instead of
-  disk; the backend memory limit default is now 4 GB to cover it.
+- Downloads are handed to the browser's own download manager the moment
+  you click, and the server streams the file to it while it's being
+  produced. You can switch apps or close the tab right away; the file
+  saves on its own. On Android it shows in the download notification
+  (bytes so far, no percentage, since the final size isn't known up front).
+- Video+audio merges stream as fragmented MP4, or MKV for VP9/AV1 formats;
+  a streamed MKV carries no overall duration in its header.
+- Nothing is written to disk: the only temp files (an mp3's source audio)
+  live on a RAM-backed tmpfs (`SCRATCH_SIZE`, 512 MB).
+- `MAX_JOB_DURATION` now covers the whole transfer, so its default rose
+  from 30 minutes to 2 hours; a concurrency slot is held for the same span.
+- A failed download can be retried from the browser's download manager
+  for `JOB_TTL`.
+- Progress reconnects after the tab is frozen; failures show the reason.
 
 ### Fixed
 
 - The UI no longer reports "saved" while the file is still transferring.
+- A download that fails partway is reported as failed by the browser
+  instead of leaving a truncated file.
 
 ## [1.12.0] - 2026-09-22
 

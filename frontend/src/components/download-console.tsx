@@ -5,7 +5,6 @@ import {
   type ReactNode,
   type SubmitEvent,
   useEffect,
-  useRef,
   useState,
 } from "react";
 import { Dot } from "@/components/dot";
@@ -14,7 +13,6 @@ import { useNsfwMode } from "@/hooks/use-nsfw-mode";
 import {
   cancelDownload,
   createDownload,
-  downloadFileUrl,
   probe,
   saveFile,
   terminalStatuses,
@@ -31,7 +29,6 @@ export function DownloadConsole() {
   const [formatId, setFormatId] = useState<string | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
   const [nsfwBlocked, setNsfwBlocked] = useState(false);
-  const savedJobRef = useRef<string | null>(null);
   const { enabled: nsfwMode } = useNsfwMode();
 
   const probeMutation = useMutation({
@@ -45,7 +42,10 @@ export function DownloadConsole() {
 
   const downloadMutation = useMutation({
     mutationFn: createDownload,
-    onSuccess: (result) => setJobId(result.job_id),
+    onSuccess: (result) => {
+      setJobId(result.job_id);
+      saveFile(result.job_id);
+    },
   });
 
   const cancelMutation = useMutation({ mutationFn: cancelDownload });
@@ -57,22 +57,6 @@ export function DownloadConsole() {
 
   const isBusy = probeMutation.isPending || downloadMutation.isPending;
   const isDownloading = jobId !== null && !(progress && terminalStatuses.has(progress.status));
-
-  // The job keeps running server-side while the tab is away; the file is
-  // handed to the browser once it's ready and the tab is in front, since a
-  // hidden tab's download may be ignored.
-  const isReady = progress?.status === "done";
-  useEffect(() => {
-    if (!jobId || !isReady || savedJobRef.current === jobId) return;
-    function save() {
-      if (document.visibilityState !== "visible" || savedJobRef.current === jobId) return;
-      savedJobRef.current = jobId;
-      saveFile(jobId!);
-    }
-    save();
-    document.addEventListener("visibilitychange", save);
-    return () => document.removeEventListener("visibilitychange", save);
-  }, [jobId, isReady]);
 
   async function handlePaste() {
     try {
@@ -250,7 +234,6 @@ export function DownloadConsole() {
         <section className="flex flex-col gap-3">
           <Prompt cmd="status" />
           <ProgressReadout
-            jobId={jobId}
             status={progress?.status}
             percent={progress?.percent}
             speed={progress?.speed}
@@ -259,7 +242,7 @@ export function DownloadConsole() {
           />
           {isDownloading && (
             <p className="text-xs text-muted-foreground">
-              you can leave this page — the file saves when you come back
+              your browser is saving it — you can leave this page
             </p>
           )}
           {isDownloading && (
@@ -300,14 +283,12 @@ function TermButton({ className, children, ...props }: ButtonHTMLAttributes<HTML
 }
 
 function ProgressReadout({
-  jobId,
   status,
   percent,
   speed,
   eta,
   error,
 }: {
-  jobId: string;
   status?: string;
   percent?: number;
   speed?: string;
@@ -326,10 +307,7 @@ function ProgressReadout({
   if (status === "done") {
     return (
       <p className="text-sm text-green-600 dark:text-green-500">
-        ok — saving, check your browser downloads{" "}
-        <a href={downloadFileUrl(jobId)} download className="underline hover:no-underline">
-          [save again]
-        </a>
+        ok — saved, check your browser downloads
       </p>
     );
   }

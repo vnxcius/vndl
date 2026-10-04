@@ -106,8 +106,9 @@ export async function getDownloadStatus(jobId: string): Promise<ProgressEvent | 
 }
 
 // A plain link rather than fetch-to-blob: the browser's own download manager
-// takes over the transfer, so it survives the tab being backgrounded and can
-// resume. Only called once the job is done, so an error body isn't saved.
+// owns the request, so it carries on with the tab backgrounded or closed.
+// The server streams the file as it's produced, and fails the request with
+// an error status — never an error body to save — if it can't.
 export function saveFile(jobId: string): void {
   const a = document.createElement("a");
   a.href = downloadFileUrl(jobId);

@@ -86,15 +86,29 @@ func runDownload(args []string) {
 	delay := stepDelay()
 	total := fileSizeBytes()
 
-	fmt.Println("[download] Destination: " + outTemplate)
+	// Like the real thing: with "-o -" the media goes to stdout and every
+	// message to stderr.
+	console := os.Stdout
+	if outTemplate == "-" {
+		console = os.Stderr
+	}
+
+	fmt.Fprintln(console, "[download] Destination: "+outTemplate)
 	steps := []float64{0.0, 0.2, 0.7, 1.4, 2.9, 5.7, 11.5, 22.9, 45.8, 68.3, 89.8, 100.0}
 	for _, pct := range steps {
 		speed := 5 + rand.Intn(80)
-		fmt.Printf("[download] %5.1f%% of %6.2fMiB at %3dMiB/s ETA 00:0%d\n",
+		fmt.Fprintf(console, "[download] %5.1f%% of %6.2fMiB at %3dMiB/s ETA 00:0%d\n",
 			pct, float64(total)/1024/1024, speed, rand.Intn(9))
 		time.Sleep(delay)
 	}
-	fmt.Printf("[download] 100%% of %.2fMiB in 00:00:01\n", float64(total)/1024/1024)
+	fmt.Fprintf(console, "[download] 100%% of %.2fMiB in 00:00:01\n", float64(total)/1024/1024)
+
+	if outTemplate == "-" {
+		if err := writeFake(os.Stdout, total); err != nil {
+			os.Exit(1)
+		}
+		return
+	}
 
 	if strings.Contains(formatID, "+") {
 		fmt.Println("[Merger] Merging formats into fake output")
@@ -121,6 +135,10 @@ func writeFakeFile(path string, size int64) error {
 		return err
 	}
 	defer f.Close()
+	return writeFake(f, size)
+}
+
+func writeFake(f *os.File, size int64) error {
 	buf := make([]byte, 64*1024)
 	var written int64
 	for written < size {

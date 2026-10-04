@@ -15,7 +15,12 @@ COPY --from=build /out/server /usr/local/bin/server
 COPY --from=build /out/fakeytdlp /usr/local/bin/yt-dlp
 # fakeytdlp never actually invokes ffmpeg — this only needs to exist on
 # PATH so the server's own startup dependency check passes.
-RUN printf '#!/bin/sh\nexit 0\n' > /usr/local/bin/ffmpeg && chmod +x /usr/local/bin/ffmpeg
+# Fake ffmpeg: a merge emits both piped inputs (fds 3 and 4), an mp3
+# conversion its input file.
+RUN printf '%s\n' '#!/bin/sh' \
+      'for a in "$@"; do [ "$prev" = -i ] && i="$a"; prev="$a"; done' \
+      'if [ "$i" = pipe:4 ]; then cat <&3; cat <&4; else cat "$i"; fi' \
+      > /usr/local/bin/ffmpeg && chmod +x /usr/local/bin/ffmpeg
 
 USER vndl
 ENV PORT=8080

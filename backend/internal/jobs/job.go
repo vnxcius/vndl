@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"os"
 	"sync"
 	"time"
 
@@ -34,14 +33,12 @@ type Job struct {
 	Container string
 	CreatedAt time.Time
 
-	mu         sync.Mutex
-	status     Status
-	errMsg     string // user-facing
-	canceled   bool
-	cancelFn   context.CancelFunc
-	scratch    string // owned by the job once Complete succeeds; removed on expiry
-	resultPath string
-	resultExt  string
+	mu        sync.Mutex
+	status    Status
+	errMsg    string // user-facing
+	streaming bool
+	canceled  bool
+	cancelFn  context.CancelFunc
 
 	subMu       sync.Mutex
 	subscribers map[chan downloader.ProgressEvent]struct{}
@@ -68,6 +65,25 @@ func newID() string {
 	return hex.EncodeToString(b)
 }
 
+// Claim ensures only one caller streams this job's bytes at a time. A
+// stream that failed can be claimed again — the browser's retry button
+// requests the same URL — but a finished or canceled one can't.
+func (j *Job) Claim() bool {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.streaming || j.canceled || j.status == StatusCompleted {
+		return false
+	}
+	j.streaming = true
+	return true
+}
+
+func (j *Job) Unclaim() {
+	j.mu.Lock()
+	j.streaming = false
+	j.mu.Unlock()
+}
+
 func (j *Job) Status() (Status, string) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
@@ -90,27 +106,10 @@ func (j *Job) Fail(msg string) {
 	j.Publish(downloader.ProgressEvent{Status: "error", Error: msg})
 }
 
-// Complete hands scratch (holding path) over to the job, to be removed when
-// it expires. It reports false, taking nothing over, if the job was canceled
-// in the meantime.
-func (j *Job) Complete(scratch, path, ext string) bool {
-	j.mu.Lock()
-	if j.canceled {
-		j.mu.Unlock()
-		return false
-	}
-	j.status = StatusCompleted
-	j.scratch, j.resultPath, j.resultExt = scratch, path, ext
-	j.mu.Unlock()
+// Done marks every byte as sent.
+func (j *Job) Done() {
+	j.SetStatus(StatusCompleted)
 	j.Publish(downloader.ProgressEvent{Status: "done"})
-	return true
-}
-
-// Result is the finished file, once the job has completed.
-func (j *Job) Result() (path, ext string, ok bool) {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	return j.resultPath, j.resultExt, j.status == StatusCompleted
 }
 
 // Event is the job's current state as a progress event: terminal states
@@ -127,16 +126,6 @@ func (j *Job) Event() downloader.ProgressEvent {
 		return downloader.ProgressEvent{Status: "downloading"}
 	}
 	return downloader.ProgressEvent{Status: string(j.status)}
-}
-
-func (j *Job) removeScratch() {
-	j.mu.Lock()
-	dir := j.scratch
-	j.scratch = ""
-	j.mu.Unlock()
-	if dir != "" {
-		_ = os.RemoveAll(dir)
-	}
 }
 
 // SetCancelFunc runs fn immediately if Cancel was already called before the
