@@ -5,6 +5,9 @@ Instagram (plus adult sites behind an opt-in NSFW toggle). Paste a link,
 pick a quality (or extract audio as mp3), download. Nothing is stored
 server-side — no database, no persisted files.
 
+It also converts images (JPG, PNG, WebP) and videos (MP4, WebM, GIF, MP3)
+entirely in the browser — files are never uploaded.
+
 > **Note:** this project is heavily vibe coded — most of the
 > implementation was written with Claude (Sonnet 5) — but guided end to
 > end by a developer who understands what the code is actually doing.
@@ -36,6 +39,12 @@ server-side — no database, no persisted files.
   while it's converted, live on a RAM-backed tmpfs (`SCRATCH_SIZE`).
 - Per-IP rate limiting and a server-wide cap on concurrent yt-dlp/ffmpeg
   processes, both in-memory, no external dependencies.
+- The converter (`/convert`) never touches the backend. Images go through
+  a `<canvas>`; video through [ffmpeg.wasm](https://ffmpegwasm.netlify.app/)
+  (single-threaded), self-hosted and fetched only on the first video
+  conversion (~32 MB, ~11 MB gzipped, cached as immutable). The input is
+  mounted read-only (WORKERFS) rather than copied into memory; the output
+  must fit in WebAssembly's memory, hence the 2 GiB cap.
 - Successful `/probe` results are cached in memory for a few minutes so
   the same link isn't re-probed repeatedly.
 - Sensitive (age-restricted) tweets, which yt-dlp can't see logged out,

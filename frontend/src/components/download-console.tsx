@@ -1,13 +1,14 @@
-import { ClipboardIcon } from "@phosphor-icons/react";
-import { useMutation } from "@tanstack/react-query";
 import {
-  type ButtonHTMLAttributes,
-  type ReactNode,
-  type SubmitEvent,
-  useEffect,
-  useState,
-} from "react";
+  CheckSquareIcon,
+  ClipboardTextIcon,
+  DownloadSimpleIcon,
+  SquareIcon,
+  XIcon,
+} from "@phosphor-icons/react";
+import { useMutation } from "@tanstack/react-query";
+import { type SubmitEvent, useEffect, useState } from "react";
 import { Dot } from "@/components/dot";
+import { ErrorLine, Hint, OkLine, TermButton } from "@/components/term";
 import { useDownloadProgress } from "@/hooks/use-download-progress";
 import { useNsfwMode } from "@/hooks/use-nsfw-mode";
 import {
@@ -18,6 +19,7 @@ import {
   terminalStatuses,
   type Format,
 } from "@/lib/api";
+import { asciiBar, scannerBar } from "@/lib/ascii";
 import { formatBytes, formatDuration } from "@/lib/format";
 import { isNsfwUrl } from "@/lib/nsfw";
 import { cn } from "@/lib/utils";
@@ -121,23 +123,28 @@ export function DownloadConsole() {
   return (
     <div className="flex flex-col gap-10">
       <section className="flex flex-col gap-3">
-        <Prompt cmd="paste_url" />
-        <form onSubmit={handleFetch} className="flex items-end gap-4">
+        <Prompt cmd="paste_url" note="a video link" />
+        <form onSubmit={handleFetch} className="flex items-end gap-2 sm:gap-4">
+          {/* text-base: anything smaller makes iOS Safari zoom in on focus */}
           <input
             id="url"
+            type="url"
+            inputMode="url"
+            aria-label="video link"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             placeholder="https://…"
             disabled={isBusy}
-            className="flex-1 border-b border-border/40 bg-transparent py-1 font-mono text-sm outline-none placeholder:text-muted-foreground/50 disabled:opacity-50"
+            className="min-h-11 min-w-0 flex-1 border-b border-border/50 bg-transparent py-2 font-mono text-base transition-colors outline-none placeholder:text-muted-foreground/70 focus:border-foreground disabled:opacity-50"
           />
           <TermButton
             type="button"
             onClick={handlePaste}
             disabled={isBusy}
             title="paste from clipboard"
+            aria-label="paste from clipboard"
           >
-            <ClipboardIcon size={14} />
+            <ClipboardTextIcon size={18} />
           </TermButton>
           <TermButton type="submit" disabled={isBusy || !url.trim()}>
             {probeMutation.isPending ? "fetching…" : "fetch"}
@@ -151,7 +158,7 @@ export function DownloadConsole() {
 
       {meta && (
         <section className="flex flex-col gap-4">
-          <Prompt cmd="result" />
+          <Prompt cmd="result" note="tap to open the original" />
           <a
             href={probeMutation.variables ?? url}
             target="_blank"
@@ -166,8 +173,8 @@ export function DownloadConsole() {
               />
             )}
             <div className="flex min-w-0 flex-col justify-center gap-1">
-              <p className="truncate text-sm group-hover:underline">{meta.title}</p>
-              <p className="text-xs text-muted-foreground">
+              <p className="line-clamp-2 text-sm font-medium group-hover:underline">{meta.title}</p>
+              <p className="text-sm text-muted-foreground">
                 {meta.uploader}
                 <Dot />
                 {formatDuration(meta.duration)}
@@ -179,26 +186,28 @@ export function DownloadConsole() {
 
       {meta && (
         <section className="flex flex-col gap-4">
-          <Prompt cmd="select_format" />
+          <Prompt cmd="select_format" note="pick a quality, or audio only" />
 
           <TermButton
             onClick={() => setAudioOnly((v) => !v)}
+            aria-pressed={audioOnly}
             className={cn("self-start", audioOnly && "bg-foreground text-background")}
           >
-            {audioOnly ? "[x]" : " "} audio only
+            {audioOnly ? <CheckSquareIcon size={18} /> : <SquareIcon size={18} />}
+            audio only
             <Dot />
             mp3
           </TermButton>
 
           {!audioOnly && (
-            <ol className="flex max-h-64 flex-col overflow-y-auto">
+            <ol className="flex max-h-80 flex-col overflow-y-auto border-t border-border/30">
               {videoFormats.map((f, i) => (
                 <li key={f.format_id}>
                   <button
                     type="button"
                     onClick={() => setFormatId(f.format_id)}
                     className={cn(
-                      "flex w-full cursor-pointer items-baseline justify-between border-b border-border/30 py-1.5 text-left text-sm",
+                      "flex min-h-11 w-full cursor-pointer items-center justify-between gap-3 border-b border-border/30 px-2 py-2 text-left text-sm",
                       formatId === f.format_id ? "bg-foreground text-background" : "hover:bg-muted",
                     )}
                   >
@@ -210,7 +219,7 @@ export function DownloadConsole() {
                       <Dot />
                       {f.ext}
                     </span>
-                    <span className="text-xs opacity-70">{formatBytes(f.filesize)}</span>
+                    <span className="shrink-0 opacity-75">{formatBytes(f.filesize)}</span>
                   </button>
                 </li>
               ))}
@@ -218,10 +227,12 @@ export function DownloadConsole() {
           )}
 
           <TermButton
+            variant="primary"
             onClick={handleDownload}
             disabled={isBusy || (!audioOnly && !selected) || isDownloading}
-            className="self-start"
+            className="w-full sm:w-fit"
           >
+            <DownloadSimpleIcon size={18} weight="bold" />
             {downloadMutation.isPending ? "starting…" : "download"}
           </TermButton>
           {downloadMutation.isError && (
@@ -240,45 +251,20 @@ export function DownloadConsole() {
             eta={progress?.eta}
             error={progress?.error}
           />
-          {isDownloading && (
-            <p className="text-xs text-muted-foreground">
-              your browser is saving it — you can leave this page
-            </p>
-          )}
+          {isDownloading && <Hint>your browser is saving it — you can leave this page</Hint>}
           {isDownloading && (
             <TermButton
               onClick={handleCancel}
               disabled={cancelMutation.isPending}
               className="self-start"
             >
+              <XIcon size={16} />
               {cancelMutation.isPending ? "canceling…" : "cancel"}
             </TermButton>
           )}
         </section>
       )}
     </div>
-  );
-}
-
-function ErrorLine({ children }: { children: ReactNode }) {
-  return <p className="text-sm text-red-600 dark:text-red-500">error: {children}</p>;
-}
-
-function TermButton({ className, children, ...props }: ButtonHTMLAttributes<HTMLButtonElement>) {
-  return (
-    <button
-      {...props}
-      className={cn(
-        "inline-flex w-fit cursor-pointer items-center gap-1 font-mono text-sm transition-colors",
-        "hover:bg-foreground hover:text-background",
-        "disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-40",
-        className,
-      )}
-    >
-      <span aria-hidden="true">[</span>
-      {children}
-      <span aria-hidden="true">]</span>
-    </button>
   );
 }
 
@@ -299,17 +285,13 @@ function ProgressReadout({
     return <ErrorLine>{error || "the download failed — try another format"}</ErrorLine>;
   }
   if (status === "canceled") {
-    return <p className="text-sm text-muted-foreground">canceled</p>;
+    return <Hint>canceled</Hint>;
   }
   if (status === "expired") {
     return <ErrorLine>this download expired — start it again</ErrorLine>;
   }
   if (status === "done") {
-    return (
-      <p className="text-sm text-green-600 dark:text-green-500">
-        ok — saved, check your browser downloads
-      </p>
-    );
+    return <OkLine>done — check your browser's downloads</OkLine>;
   }
   if (status === "processing") {
     return <ProcessingIndicator />;
@@ -321,7 +303,7 @@ function ProgressReadout({
       <p className="font-mono">
         {asciiBar(pct)} {pct}%
       </p>
-      <p className="text-xs text-muted-foreground">
+      <p className="text-sm text-muted-foreground">
         {speed ?? "--"}
         <Dot />
         eta {eta ?? "--"}
@@ -349,23 +331,9 @@ function ProcessingIndicator() {
   return (
     <div className="flex flex-col gap-1 text-sm">
       <p className="font-mono">{scannerBar(now)}</p>
-      <p className="text-xs text-muted-foreground">merging / encoding… {elapsed} elapsed</p>
+      <p className="text-sm text-muted-foreground">merging / encoding… {elapsed} elapsed</p>
     </div>
   );
-}
-
-function scannerBar(now: number, width = 24, segment = 4): string {
-  const travel = width - segment;
-  const cycle = travel * 2;
-  const pos = Math.floor(now / 80) % cycle;
-  const offset = pos < travel ? pos : cycle - pos;
-  return "░".repeat(offset) + "█".repeat(segment) + "░".repeat(width - segment - offset);
-}
-
-function asciiBar(percent: number, width = 24): string {
-  const clamped = Math.max(0, Math.min(100, percent));
-  const filled = Math.round((clamped / 100) * width);
-  return "█".repeat(filled) + "░".repeat(width - filled);
 }
 
 function pickDefaultFormat(formats: Format[]): string | null {

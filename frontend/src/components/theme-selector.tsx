@@ -23,13 +23,13 @@ export function ThemeSelector() {
             aria-pressed={active}
             title={opt.label}
             className={cn(
-              "flex h-5.5 cursor-pointer items-center justify-center px-2 py-1 transition-colors not-first:border-l not-first:border-border/40",
+              "flex h-9 min-w-9 cursor-pointer items-center justify-center px-2 transition-colors not-first:border-l not-first:border-border/40",
               active
                 ? "bg-foreground text-background"
                 : "text-muted-foreground hover:text-foreground",
             )}
           >
-            <opt.Icon size={13} weight={active ? "fill" : "regular"} />
+            <opt.Icon size={16} weight={active ? "fill" : "regular"} />
           </button>
         );
       })}

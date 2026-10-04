@@ -48,6 +48,12 @@
   --radius-2xl: 0rem;
   --radius-3xl: 0rem;
   --radius-4xl: 0rem;
+  /* type scale one step up from Tailwind's: monospace reads small, and the
+     12px/14px defaults left secondary text hard to read on phones */
+  --text-xs: 0.8125rem;
+  --text-xs--line-height: 1.5;
+  --text-sm: 0.9375rem;
+  --text-sm--line-height: 1.55;
   /* hard, unblurred offset shadows instead of soft elevation */
   --shadow-brutal-sm: 2px 2px 0 0 var(--foreground);
   --shadow-brutal: 4px 4px 0 0 var(--foreground);

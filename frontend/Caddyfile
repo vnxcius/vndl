@@ -6,6 +6,10 @@
 		reverse_proxy backend:8080
 	}
 
+	# Vite content-hashes these filenames, so they never change in place —
+	# notably the 32 MB ffmpeg.wasm core, downloaded once per browser.
+	header /assets/* Cache-Control "public, max-age=31536000, immutable"
+
 	handle {
 		try_files {path} /index.html
 		file_server

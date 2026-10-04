@@ -13,6 +13,14 @@ export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
   },
+  // ffmpeg.wasm spawns its worker via new URL(..., import.meta.url), which
+  // dependency pre-bundling breaks; the worker itself imports modules.
+  optimizeDeps: {
+    exclude: ["@ffmpeg/ffmpeg"],
+  },
+  worker: {
+    format: "es",
+  },
   resolve: {
     alias: {
       "@": new URL("./src", import.meta.url).pathname,

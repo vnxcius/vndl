@@ -4,10 +4,21 @@ All notable changes to this project are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.13.0] - 2026-10-04
+
+### Added
+
+- Converter (`/convert`): images to JPG, PNG or WebP (with a quality
+  setting), videos to MP4, WebM, GIF or MP3. Everything runs on your
+  device — files are never uploaded. Video conversion loads ffmpeg.wasm
+  (~11 MB download) the first time it's used.
 
 ### Changed
 
+- Easier to read and tap: larger, higher-contrast text, every button and
+  row at least 40px tall, a clear main action per step, plain-language
+  hints next to each `$ command`, and icons where they help. The link
+  field no longer makes iPhones zoom in.
 - Downloads are handed to the browser's own download manager the moment
   you click, and the server streams the file to it while it's being
   produced. You can switch apps or close the tab right away; the file

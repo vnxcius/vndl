@@ -1,8 +1,11 @@
-export function Prompt({ cmd }: { cmd: string }) {
+// A section heading styled as a shell command; note is a plain-language
+// "# comment" saying what the step is for.
+export function Prompt({ cmd, note }: { cmd: string; note?: string }) {
   return (
-    <p className="text-xs text-muted-foreground">
-      <span className="text-green-600 dark:text-green-400">$</span>{" "}
-      <span className="text-neutral-500">{cmd}</span>
+    <p className="text-sm">
+      <span className="font-semibold text-green-700 dark:text-green-400">$</span>{" "}
+      <span className="font-medium text-foreground">{cmd}</span>
+      {note && <span className="text-muted-foreground"> # {note}</span>}
     </p>
   );
 }

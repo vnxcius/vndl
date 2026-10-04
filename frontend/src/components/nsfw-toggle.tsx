@@ -10,13 +10,13 @@ export function NsfwToggle() {
   const [infoOpen, setInfoOpen] = useState(false);
 
   return (
-    <div className="inline-flex h-6 items-center gap-1">
+    <div className="inline-flex h-9 items-center gap-1">
       <button
         type="button"
         onClick={() => setEnabled(!enabled)}
         aria-pressed={enabled}
         className={cn(
-          "inline-flex h-6 w-max cursor-pointer items-center gap-1 border border-border/40 px-2 py-1 font-mono text-xs transition-colors",
+          "inline-flex h-9 w-max cursor-pointer items-center gap-1 border border-border/40 px-3 font-mono text-sm transition-colors",
           enabled ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground",
         )}
       >
@@ -28,9 +28,9 @@ export function NsfwToggle() {
         <TooltipTrigger
           onClick={() => setInfoOpen((v) => !v)}
           aria-label="which sites this unlocks"
-          className="flex h-6 w-6 cursor-pointer items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
+          className="flex h-9 w-9 cursor-pointer items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
         >
-          <InfoIcon size={13} />
+          <InfoIcon size={18} />
         </TooltipTrigger>
         <TooltipContent>{NSFW_HOSTS.join(", ")}</TooltipContent>
       </Tooltip>
