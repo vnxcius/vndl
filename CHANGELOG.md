@@ -4,6 +4,14 @@ All notable changes to this project are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- Tapping "audio only" on a translated page no longer crashes it with an
+  `insertBefore` error, and the page now tolerates translators, extensions
+  and in-app browsers moving parts of it around.
+
 ## [1.13.0] - 2026-10-04
 
 ### Added

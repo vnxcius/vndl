@@ -193,38 +193,45 @@ export function DownloadConsole() {
             aria-pressed={audioOnly}
             className={cn("self-start", audioOnly && "bg-foreground text-background")}
           >
-            {audioOnly ? <CheckSquareIcon size={18} /> : <SquareIcon size={18} />}
+            {/* Its own parent: swapping icons otherwise inserts before the text
+                below, which translators replace, crashing React. */}
+            <span className="contents">
+              {audioOnly ? <CheckSquareIcon size={18} /> : <SquareIcon size={18} />}
+            </span>
             audio only
             <Dot />
             mp3
           </TermButton>
 
-          {!audioOnly && (
-            <ol className="flex max-h-80 flex-col overflow-y-auto border-t border-border/30">
-              {videoFormats.map((f, i) => (
-                <li key={f.format_id}>
-                  <button
-                    type="button"
-                    onClick={() => setFormatId(f.format_id)}
-                    className={cn(
-                      "flex min-h-11 w-full cursor-pointer items-center justify-between gap-3 border-b border-border/30 px-2 py-2 text-left text-sm",
-                      formatId === f.format_id ? "bg-foreground text-background" : "hover:bg-muted",
-                    )}
-                  >
-                    <span>
-                      <span className="text-muted-foreground">
-                        {String(i + 1).padStart(2, "0")}
-                      </span>{" "}
-                      {f.resolution || f.format_note || f.format_id}
-                      <Dot />
-                      {f.ext}
-                    </span>
-                    <span className="shrink-0 opacity-75">{formatBytes(f.filesize)}</span>
-                  </button>
-                </li>
-              ))}
-            </ol>
-          )}
+          {/* Hidden, not unmounted: re-inserting it would need the download
+              button as an anchor, which React can't rely on if it was moved. */}
+          <ol
+            className={cn(
+              "max-h-80 flex-col overflow-y-auto border-t border-border/30",
+              audioOnly ? "hidden" : "flex",
+            )}
+          >
+            {videoFormats.map((f, i) => (
+              <li key={f.format_id}>
+                <button
+                  type="button"
+                  onClick={() => setFormatId(f.format_id)}
+                  className={cn(
+                    "flex min-h-11 w-full cursor-pointer items-center justify-between gap-3 border-b border-border/30 px-2 py-2 text-left text-sm",
+                    formatId === f.format_id ? "bg-foreground text-background" : "hover:bg-muted",
+                  )}
+                >
+                  <span>
+                    <span className="text-muted-foreground">{String(i + 1).padStart(2, "0")}</span>{" "}
+                    {f.resolution || f.format_note || f.format_id}
+                    <Dot />
+                    {f.ext}
+                  </span>
+                  <span className="shrink-0 opacity-75">{formatBytes(f.filesize)}</span>
+                </button>
+              </li>
+            ))}
+          </ol>
 
           <TermButton
             variant="primary"
@@ -244,13 +251,17 @@ export function DownloadConsole() {
       {jobId && (
         <section className="flex flex-col gap-3">
           <Prompt cmd="status" />
-          <ProgressReadout
-            status={progress?.status}
-            percent={progress?.percent}
-            speed={progress?.speed}
-            eta={progress?.eta}
-            error={progress?.error}
-          />
+          {/* The readout swaps elements between phases. This wrapper gives it a
+              parent of its own, so the swap needs no sibling as an anchor. */}
+          <div className="contents">
+            <ProgressReadout
+              status={progress?.status}
+              percent={progress?.percent}
+              speed={progress?.speed}
+              eta={progress?.eta}
+              error={progress?.error}
+            />
+          </div>
           {isDownloading && <Hint>your browser is saving it — you can leave this page</Hint>}
           {isDownloading && (
             <TermButton
