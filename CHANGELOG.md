@@ -6,11 +6,17 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.13.1] - 2026-11-09
+
 ### Fixed
 
 - Tapping "audio only" on a translated page no longer crashes it with an
   `insertBefore` error, and the page now tolerates translators, extensions
   and in-app browsers moving parts of it around.
+- Age-restricted (sensitive media) Twitter/X videos linked as
+  `.../status/<id>/video/1`, the form X's "copy video link" produces, now
+  download through the fxtwitter fallback instead of failing with
+  "could not read that link".
 
 ## [1.13.0] - 2026-10-04
 
