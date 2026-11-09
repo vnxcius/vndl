@@ -70,11 +70,16 @@ func IsFxFormat(formatID string) bool {
 	return strings.HasPrefix(formatID, fxFormatPrefix)
 }
 
+// sensitiveMediaRe matches yt-dlp's errors for a tweet whose media is hidden
+// logged out. A /video/N link reports it as "Video #N is unavailable"
+// (--no-playlist makes yt-dlp honor the index) instead of "No video could
+// be found".
+var sensitiveMediaRe = regexp.MustCompile(`(?i)no video could be found|video #\d+ is unavailable`)
+
 // NeedsFxFallback reports whether a failed yt-dlp probe is the logged-out
 // sensitive-media case.
 func NeedsFxFallback(raw string, probeErr error) bool {
-	return probeErr != nil && IsTwitterURL(raw) &&
-		strings.Contains(strings.ToLower(probeErr.Error()), "no video could be found")
+	return probeErr != nil && IsTwitterURL(raw) && sensitiveMediaRe.MatchString(probeErr.Error())
 }
 
 // ProbeFx and ResolveFxURL log only counts, statuses and timings — never

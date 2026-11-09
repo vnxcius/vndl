@@ -130,6 +130,8 @@ func TestNeedsFxFallbackOnlyForSensitiveTweets(t *testing.T) {
 	}{
 		{tweetURL, noVideo, true},
 		{"https://twitter.com/a/status/1", noVideo, true},
+		{tweetURL + "/video/1", errors.New("ERROR: [twitter] 1: Video #1 is unavailable"), true},
+		{tweetURL + "/photo/1", errors.New("ERROR: [twitter] 1: Media #1 is not a video"), false},
 		{"https://www.youtube.com/watch?v=x", noVideo, false},
 		{tweetURL, errors.New("ERROR: Private video"), false},
 		{tweetURL, nil, false},
