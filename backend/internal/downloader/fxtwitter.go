@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"path"
 	"regexp"
 	"sort"
 	"strconv"
@@ -17,10 +18,16 @@ import (
 	"time"
 )
 
-// fxtwitter resolves tweets yt-dlp can't see logged out (sensitive media).
-// Only the tweet ID is sent, server-side — never the visitor's IP.
+// fxtwitter resolves tweets yt-dlp can't see logged out (sensitive media),
+// and the photos yt-dlp doesn't extract at all. Only the tweet ID is sent,
+// server-side — never the visitor's IP.
 
-const fxFormatPrefix = "fx-"
+const (
+	fxFormatPrefix    = "fx-"
+	fxPhotoPrefix     = "fximg-"
+	maxPhotoBytes     = 64 << 20
+	photoFetchTimeout = 60 * time.Second
+)
 
 var (
 	fxAPIBase    = "https://api.fxtwitter.com"
@@ -33,9 +40,18 @@ var (
 	}
 	tweetIDRe    = regexp.MustCompile(`/status(?:es)?/(\d+)`)
 	videoIndexRe = regexp.MustCompile(`/video/(\d+)`)
+	photoIndexRe = regexp.MustCompile(`/status(?:es)?/\d+/photo/(\d+)`)
 	dimensionsRe = regexp.MustCompile(`/(\d+)x(\d+)/`)
 	errNoFxVideo = errors.New("fxtwitter: tweet has no video")
+	errNoFxMedia = errors.New("fxtwitter: tweet has no video or photo")
+	errNoFxPhoto = errors.New("fxtwitter: tweet has no such photo")
 	fxMediaHosts = []string{"video.twimg.com"}
+	fxPhotoHosts = []string{"pbs.twimg.com"}
+	// Photos are fetched directly, not through yt-dlp: never follow a
+	// redirect off the allowed host.
+	photoHTTPClient = &http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
 )
 
 type fxVariant struct {
@@ -50,6 +66,12 @@ type fxVideo struct {
 	Variants     []fxVariant `json:"variants"`
 }
 
+type fxPhoto struct {
+	URL    string `json:"url"`
+	Width  int    `json:"width"`
+	Height int    `json:"height"`
+}
+
 type fxTweet struct {
 	ID     string `json:"id"`
 	Text   string `json:"text"`
@@ -58,6 +80,7 @@ type fxTweet struct {
 	} `json:"author"`
 	Media struct {
 		Videos []fxVideo `json:"videos"`
+		Photos []fxPhoto `json:"photos"`
 	} `json:"media"`
 }
 
@@ -68,6 +91,18 @@ func IsTwitterURL(raw string) bool {
 
 func IsFxFormat(formatID string) bool {
 	return strings.HasPrefix(formatID, fxFormatPrefix)
+}
+
+// IsPhotoFormat reports a tweet photo, served by fxtwitter's metadata and
+// fetched directly from pbs.twimg.com.
+func IsPhotoFormat(formatID string) bool {
+	return strings.HasPrefix(formatID, fxPhotoPrefix)
+}
+
+// IsTwitterPhotoURL reports a ".../status/<id>/photo/N" link, which yt-dlp
+// can't serve (it extracts videos only), so its probe goes to fxtwitter.
+func IsTwitterPhotoURL(raw string) bool {
+	return IsTwitterURL(raw) && photoIndexRe.MatchString(raw)
 }
 
 // sensitiveMediaRe matches yt-dlp's errors for a tweet whose media is hidden
@@ -83,40 +118,66 @@ func NeedsFxFallback(raw string, probeErr error) bool {
 }
 
 // ProbeFx and ResolveFxURL log only counts, statuses and timings — never
-// the tweet ID or any URL.
+// the tweet ID or any URL. Formats are the tweet's video variants (fx-<bitrate>)
+// followed by its photos (fximg-<n>, vcodec and acodec "none").
 func ProbeFx(ctx context.Context, raw string, log *slog.Logger) (*Metadata, error) {
 	log = log.With("op", "probe")
-	tweet, video, err := fetchFxVideo(ctx, raw, log)
+	tweet, err := fetchFxTweet(ctx, raw, log)
 	if err != nil {
 		return nil, err
 	}
 
-	meta := &Metadata{
-		Title:    fxTitle(tweet),
-		Thumb:    video.ThumbnailURL,
-		Duration: video.Duration,
-		Uploader: tweet.Author.Name,
-	}
-	for _, v := range mp4Variants(video) {
-		f := Format{
-			ID:     fxFormatPrefix + strconv.Itoa(v.Bitrate),
-			Ext:    "mp4",
-			VCodec: "avc1",
-			ACodec: "mp4a",
+	meta := &Metadata{Title: fxTitle(tweet), Uploader: tweet.Author.Name}
+	if video, ok := pickFxVideo(raw, tweet); ok {
+		meta.Thumb, meta.Duration = video.ThumbnailURL, video.Duration
+		for _, v := range mp4Variants(video) {
+			f := Format{
+				ID:     fxFormatPrefix + strconv.Itoa(v.Bitrate),
+				Ext:    "mp4",
+				VCodec: "avc1",
+				ACodec: "mp4a",
+			}
+			if m := dimensionsRe.FindStringSubmatch(v.URL); m != nil {
+				f.Resolution = m[1] + "x" + m[2]
+				f.Height, _ = strconv.Atoi(m[2])
+			}
+			meta.Formats = append(meta.Formats, f)
 		}
-		if m := dimensionsRe.FindStringSubmatch(v.URL); m != nil {
-			f.Resolution = m[1] + "x" + m[2]
-			f.Height, _ = strconv.Atoi(m[2])
+	}
+	videoFormats := len(meta.Formats)
+	for i, p := range tweet.Media.Photos {
+		u, ok := photoURL(p.URL)
+		if !ok {
+			continue
+		}
+		n := strconv.Itoa(i + 1)
+		f := Format{
+			ID:     fxPhotoPrefix + n,
+			Ext:    photoExt(u),
+			Note:   "photo " + n,
+			VCodec: "none",
+			ACodec: "none",
+			Height: p.Height,
+		}
+		if p.Width > 0 && p.Height > 0 {
+			f.Resolution = strconv.Itoa(p.Width) + "x" + strconv.Itoa(p.Height)
+		}
+		if meta.Thumb == "" {
+			meta.Thumb = photoSized(u, "small")
 		}
 		meta.Formats = append(meta.Formats, f)
 	}
 	if len(meta.Formats) == 0 {
-		log.Warn("fxtwitter.probe", "status", "error", "videos", len(tweet.Media.Videos), "error", errNoFxVideo.Error())
-		return nil, errNoFxVideo
+		log.Warn("fxtwitter.probe", "status", "error", "videos", len(tweet.Media.Videos),
+			"photos", len(tweet.Media.Photos), "error", errNoFxMedia.Error())
+		return nil, errNoFxMedia
 	}
-	log.Info("fxtwitter.probe", "status", "ok",
-		"videos", len(tweet.Media.Videos), "formats", len(meta.Formats),
-		"top_height", meta.Formats[0].Height, "duration_s", video.Duration)
+	fields := []any{"status", "ok", "videos", len(tweet.Media.Videos), "photos", len(tweet.Media.Photos),
+		"formats", len(meta.Formats)}
+	if videoFormats > 0 {
+		fields = append(fields, "top_height", meta.Formats[0].Height, "duration_s", meta.Duration)
+	}
+	log.Info("fxtwitter.probe", fields...)
 	return meta, nil
 }
 
@@ -124,9 +185,14 @@ func ProbeFx(ctx context.Context, raw string, log *slog.Logger) (*Metadata, erro
 // to the highest bitrate if that exact variant is gone.
 func ResolveFxURL(ctx context.Context, raw, formatID string, log *slog.Logger) (string, error) {
 	log = log.With("op", "resolve", "requested", formatID)
-	_, video, err := fetchFxVideo(ctx, raw, log)
+	tweet, err := fetchFxTweet(ctx, raw, log)
 	if err != nil {
 		return "", err
+	}
+	video, ok := pickFxVideo(raw, tweet)
+	if !ok {
+		log.Warn("fxtwitter.resolve", "status", "error", "error", errNoFxVideo.Error())
+		return "", errNoFxVideo
 	}
 	variants := mp4Variants(video)
 	if len(variants) == 0 {
@@ -195,19 +261,19 @@ func fxCacheSet(id string, tweet *fxTweet) {
 	fxCache.items[id] = fxCacheEntry{tweet: tweet, cachedAt: now}
 }
 
-func fetchFxVideo(ctx context.Context, raw string, log *slog.Logger) (*fxTweet, *fxVideo, error) {
+func fetchFxTweet(ctx context.Context, raw string, log *slog.Logger) (*fxTweet, error) {
 	m := tweetIDRe.FindStringSubmatch(raw)
 	if m == nil {
 		err := errors.New("fxtwitter: no tweet id in url")
 		log.Warn("fxtwitter.request", "outcome", "failed", "error", err.Error())
-		return nil, nil, err
+		return nil, err
 	}
 	tweetID := m[1]
 
 	tweet, cached := fxCacheGet(tweetID)
 	if cached {
 		log.Info("fxtwitter.request", "outcome", "cache_hit")
-		return pickFxVideo(raw, tweet)
+		return tweet, nil
 	}
 
 	endpoint := fxAPIBase + "/i/status/" + tweetID
@@ -217,7 +283,7 @@ func fetchFxVideo(ctx context.Context, raw string, log *slog.Logger) (*fxTweet, 
 		if attempt > 1 {
 			select {
 			case <-ctx.Done():
-				return nil, nil, ctx.Err()
+				return nil, ctx.Err()
 			case <-time.After(fxRetryDelay):
 			}
 		}
@@ -240,16 +306,16 @@ func fetchFxVideo(ctx context.Context, raw string, log *slog.Logger) (*fxTweet, 
 		break
 	}
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	fxCacheSet(tweetID, tweet)
-	return pickFxVideo(raw, tweet)
+	return tweet, nil
 }
 
-func pickFxVideo(raw string, tweet *fxTweet) (*fxTweet, *fxVideo, error) {
+func pickFxVideo(raw string, tweet *fxTweet) (*fxVideo, bool) {
 	videos := tweet.Media.Videos
 	if len(videos) == 0 {
-		return nil, nil, errNoFxVideo
+		return nil, false
 	}
 	idx := 0
 	if vm := videoIndexRe.FindStringSubmatch(raw); vm != nil {
@@ -257,7 +323,7 @@ func pickFxVideo(raw string, tweet *fxTweet) (*fxTweet, *fxVideo, error) {
 			idx = n - 1
 		}
 	}
-	return tweet, &videos[idx], nil
+	return &videos[idx], true
 }
 
 func fxRequest(ctx context.Context, endpoint string) (tweet *fxTweet, status int, retry bool, err error) {
@@ -321,4 +387,92 @@ func fxTitle(t *fxTweet) string {
 	default:
 		return "tweet " + t.ID
 	}
+}
+
+// ResolveFxPhoto returns the original-size URL of a tweet's fximg-<n> photo
+// and its file extension.
+func ResolveFxPhoto(ctx context.Context, raw, formatID string, log *slog.Logger) (string, string, error) {
+	log = log.With("op", "resolve_photo")
+	tweet, err := fetchFxTweet(ctx, raw, log)
+	if err != nil {
+		return "", "", err
+	}
+	n, err := strconv.Atoi(strings.TrimPrefix(formatID, fxPhotoPrefix))
+	if err != nil || n < 1 || n > len(tweet.Media.Photos) {
+		log.Warn("fxtwitter.resolve", "status", "error", "photos", len(tweet.Media.Photos), "error", errNoFxPhoto.Error())
+		return "", "", errNoFxPhoto
+	}
+	u, ok := photoURL(tweet.Media.Photos[n-1].URL)
+	if !ok {
+		err := errors.New("fxtwitter: photo url is not on an allowed host")
+		log.Warn("fxtwitter.resolve", "status", "error", "error", err.Error())
+		return "", "", err
+	}
+	log.Info("fxtwitter.resolve", "status", "ok", "photos", len(tweet.Media.Photos), "media_host", u.Hostname())
+	return photoSized(u, "orig"), photoExt(u), nil
+}
+
+// photoURL parses a photo URL, accepting only https on pbs.twimg.com.
+func photoURL(raw string) (*url.URL, bool) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || !hostAllowed(strings.ToLower(u.Hostname()), fxPhotoHosts) {
+		return nil, false
+	}
+	return u, true
+}
+
+// photoExt is the photo's format: the path's extension, or the legacy
+// "?format=" parameter.
+func photoExt(u *url.URL) string {
+	ext := strings.TrimPrefix(strings.ToLower(path.Ext(u.Path)), ".")
+	if ext == "" {
+		ext = strings.ToLower(u.Query().Get("format"))
+	}
+	switch ext {
+	case "jpg", "jpeg":
+		return "jpg"
+	case "png", "webp", "gif":
+		return ext
+	}
+	return "jpg"
+}
+
+// photoSized asks pbs.twimg.com for a size variant ("orig", "small", ...).
+func photoSized(u *url.URL, name string) string {
+	c := *u
+	q := c.Query()
+	q.Set("name", name)
+	c.RawQuery = q.Encode()
+	return c.String()
+}
+
+// FetchPhoto streams a resolved photo into w, up to maxPhotoBytes.
+func FetchPhoto(ctx context.Context, photoURL string, w io.Writer) (int64, error) {
+	ctx, cancel := context.WithTimeout(ctx, photoFetchTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, photoURL, nil)
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("User-Agent", "vndl (+https://dl.vncius.dev)")
+	resp, err := photoHTTPClient.Do(req)
+	if err != nil {
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			err = ue.Err // drop the URL
+		}
+		return 0, fmt.Errorf("photo: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("photo: http %d", resp.StatusCode)
+	}
+	if !strings.HasPrefix(resp.Header.Get("Content-Type"), "image/") {
+		return 0, errors.New("photo: response is not an image")
+	}
+	n, err := io.Copy(w, io.LimitReader(resp.Body, maxPhotoBytes+1))
+	if err == nil && n > maxPhotoBytes {
+		err = errors.New("photo: larger than allowed")
+	}
+	return n, err
 }

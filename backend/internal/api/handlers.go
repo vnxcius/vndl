@@ -98,8 +98,14 @@ func (s *Server) probe(w http.ResponseWriter, r *http.Request) {
 	} else {
 		ev.Set("cache", "miss")
 		var err error
-		meta, err = downloader.Probe(r.Context(), s.cfg, cleanURL)
-		if downloader.NeedsFxFallback(cleanURL, err) {
+		if downloader.IsTwitterPhotoURL(cleanURL) {
+			// yt-dlp extracts videos only; a photo link goes straight to fxtwitter.
+			ev.Set("fallback", "fxtwitter")
+			meta, err = downloader.ProbeFx(r.Context(), cleanURL, slog.With("endpoint", "probe"))
+			if err != nil {
+				ev.Set("fallback_error", err.Error())
+			}
+		} else if meta, err = downloader.Probe(r.Context(), s.cfg, cleanURL); downloader.NeedsFxFallback(cleanURL, err) {
 			ev.Set("fallback", "fxtwitter")
 			if fxMeta, fxErr := downloader.ProbeFx(r.Context(), cleanURL, slog.With("endpoint", "probe")); fxErr == nil {
 				meta, err = fxMeta, nil
@@ -158,6 +164,12 @@ func (s *Server) createDownload(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid format_id")
 		return
 	}
+	photo := downloader.IsPhotoFormat(req.FormatID)
+	if photo && (req.AudioOnly || !downloader.IsTwitterURL(cleanURL)) {
+		ev.Set("status", "error").Set("error", "invalid photo request")
+		writeError(w, http.StatusBadRequest, "invalid format_id")
+		return
+	}
 	if !req.AudioOnly && !validContainer[req.Container] {
 		ev.Set("status", "error").Set("error", "invalid container")
 		writeError(w, http.StatusBadRequest, "invalid container")
@@ -171,7 +183,10 @@ func (s *Server) createDownload(w http.ResponseWriter, r *http.Request) {
 	// The client's "ext" is ignored — /file names the result after the file
 	// yt-dlp actually wrote.
 	ext, container := "mp3", ""
-	if !req.AudioOnly {
+	switch {
+	case photo:
+		ext = "jpg" // /file uses the photo's real format
+	case !req.AudioOnly:
 		container = req.Container
 		if container == "" {
 			container = "mkv"

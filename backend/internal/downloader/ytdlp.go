@@ -202,6 +202,14 @@ func ContentType(ext string) string {
 		return "video/x-matroska"
 	case "webm":
 		return "video/webm"
+	case "jpg", "jpeg":
+		return "image/jpeg"
+	case "png":
+		return "image/png"
+	case "webp":
+		return "image/webp"
+	case "gif":
+		return "image/gif"
 	default:
 		return "application/octet-stream"
 	}
@@ -300,8 +308,8 @@ func FriendlyError(raw string) string {
 		return "this video is unavailable — it may have been removed"
 	case strings.Contains(lower, "not made this video available in your country"):
 		return "this video isn't available from the server's region"
-	case strings.Contains(lower, "no video could be found"):
-		return "no video found at that link — if you're sure it has one, it may be age-restricted or region-locked content, which isn't supported yet"
+	case strings.Contains(lower, "no video could be found"), strings.Contains(lower, "no video or photo"):
+		return "no video or photo found at that link — it may have been deleted, or be region-locked"
 	case strings.Contains(lower, "http error 410"), strings.Contains(lower, "http error 403"):
 		return "the site refused to serve this video's file — downloads from it may be temporarily broken"
 	case strings.Contains(lower, "no space left on device"):

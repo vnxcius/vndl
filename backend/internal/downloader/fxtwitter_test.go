@@ -142,3 +142,120 @@ func TestNeedsFxFallbackOnlyForSensitiveTweets(t *testing.T) {
 		}
 	}
 }
+
+const fxPhotoSample = `{"code":200,"message":"OK","tweet":{"id":"2090883552552591439","text":"two pics","author":{"name":"A"},"media":{"photos":[
+{"type":"photo","url":"https://pbs.twimg.com/media/One.jpg?name=orig","width":1920,"height":1080},
+{"type":"photo","url":"https://pbs.twimg.com/media/Two.png?name=orig","width":800,"height":600}]}}}`
+
+func TestProbeFxListsPhotos(t *testing.T) {
+	fakeFx(t, fxPhotoSample, 0)
+
+	meta, err := ProbeFx(context.Background(), tweetURL, discard)
+	if err != nil {
+		t.Fatalf("ProbeFx: %v", err)
+	}
+	if len(meta.Formats) != 2 {
+		t.Fatalf("formats = %+v, want 2 photos", meta.Formats)
+	}
+	first, second := meta.Formats[0], meta.Formats[1]
+	if first.ID != "fximg-1" || first.Ext != "jpg" || first.Resolution != "1920x1080" || first.VCodec != "none" || first.ACodec != "none" {
+		t.Errorf("first photo = %+v", first)
+	}
+	if second.ID != "fximg-2" || second.Ext != "png" {
+		t.Errorf("second photo = %+v", second)
+	}
+	if !strings.Contains(meta.Thumb, "One.jpg") || !strings.Contains(meta.Thumb, "name=small") {
+		t.Errorf("thumb = %q", meta.Thumb)
+	}
+	if meta.Duration != 0 {
+		t.Errorf("duration = %v", meta.Duration)
+	}
+}
+
+func TestProbeFxListsVideoThenPhotos(t *testing.T) {
+	mixed := strings.Replace(fxSample, `"media":{`, `"media":{"photos":[{"url":"https://pbs.twimg.com/media/P.jpg","width":10,"height":10}],`, 1)
+	fakeFx(t, mixed, 0)
+
+	meta, err := ProbeFx(context.Background(), tweetURL, discard)
+	if err != nil {
+		t.Fatalf("ProbeFx: %v", err)
+	}
+	if len(meta.Formats) != 3 || !IsFxFormat(meta.Formats[0].ID) || meta.Formats[2].ID != "fximg-1" {
+		t.Fatalf("formats = %+v, want 2 videos then 1 photo", meta.Formats)
+	}
+	if meta.Thumb != "https://pbs.twimg.com/t.jpg" {
+		t.Errorf("thumb = %q, want the video's", meta.Thumb)
+	}
+}
+
+func TestProbeFxNoMedia(t *testing.T) {
+	fakeFx(t, `{"code":200,"tweet":{"id":"1","text":"just text","media":{}}}`, 0)
+	_, err := ProbeFx(context.Background(), tweetURL, discard)
+	if !errors.Is(err, errNoFxMedia) {
+		t.Fatalf("err = %v, want errNoFxMedia", err)
+	}
+	if FriendlyError(err.Error()) == genericProbeFailure {
+		t.Errorf("no-media error should get a specific message")
+	}
+}
+
+func TestResolveFxPhoto(t *testing.T) {
+	fakeFx(t, fxPhotoSample, 0)
+
+	got, ext, err := ResolveFxPhoto(context.Background(), tweetURL, "fximg-2", discard)
+	if err != nil || got != "https://pbs.twimg.com/media/Two.png?name=orig" || ext != "png" {
+		t.Errorf("fximg-2 -> %q, %q, %v", got, ext, err)
+	}
+	for _, bad := range []string{"fximg-0", "fximg-3", "fximg-x"} {
+		if _, _, err := ResolveFxPhoto(context.Background(), tweetURL, bad, discard); err == nil {
+			t.Errorf("%s: expected an error", bad)
+		}
+	}
+
+	fakeFx(t, strings.ReplaceAll(fxPhotoSample, "pbs.twimg.com", "evil.example"), 0)
+	if _, _, err := ResolveFxPhoto(context.Background(), tweetURL, "fximg-1", discard); err == nil {
+		t.Error("expected a non-twimg photo host to be rejected")
+	}
+}
+
+func TestIsTwitterPhotoURL(t *testing.T) {
+	cases := map[string]bool{
+		tweetURL + "/photo/1":                    true,
+		"https://twitter.com/a/status/1/photo/4": true,
+		tweetURL:                                 false,
+		tweetURL + "/video/1":                    false,
+		"https://youtube.com/status/1/photo/1":   false,
+	}
+	for u, want := range cases {
+		if got := IsTwitterPhotoURL(u); got != want {
+			t.Errorf("IsTwitterPhotoURL(%q) = %v, want %v", u, got, want)
+		}
+	}
+}
+
+func TestFetchPhotoChecksResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/ok.jpg":
+			w.Header().Set("Content-Type", "image/jpeg")
+			_, _ = w.Write([]byte("jpegbytes"))
+		case "/html":
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = w.Write([]byte("<html>"))
+		default:
+			http.Redirect(w, r, "https://evil.example/", http.StatusFound)
+		}
+	}))
+	defer srv.Close()
+
+	var buf bytes.Buffer
+	if n, err := FetchPhoto(context.Background(), srv.URL+"/ok.jpg", &buf); err != nil || n != 9 || buf.String() != "jpegbytes" {
+		t.Errorf("ok: n=%d err=%v body=%q", n, err, buf.String())
+	}
+	if _, err := FetchPhoto(context.Background(), srv.URL+"/html", io.Discard); err == nil {
+		t.Error("expected a non-image response to be rejected")
+	}
+	if _, err := FetchPhoto(context.Background(), srv.URL+"/redirect", io.Discard); err == nil {
+		t.Error("expected a redirect not to be followed")
+	}
+}

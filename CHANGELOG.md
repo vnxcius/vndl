@@ -6,6 +6,13 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Photos from Twitter/X: paste a tweet link (or a `.../photo/N` link) and
+  pick a photo to save it at its original size. Tweets with several photos
+  list each one. For a tweet with both a video and photos, use a photo's
+  `.../photo/N` link to get its photos.
+
 ## [1.13.1] - 2026-11-09
 
 ### Fixed

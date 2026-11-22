@@ -60,6 +60,11 @@ the probe is redone through `api.fxtwitter.com`, and the formats come back as
 `fx-<bitrate>`. On download, `stream.go` resolves `fx-` formats to a direct
 `video.twimg.com` URL and streams it through yt-dlp's generic extractor.
 
+- Photos also come from fxtwitter (yt-dlp extracts videos only): they're
+  `fximg-<n>` formats (vcodec/acodec `none`), listed after any video. A
+  `/photo/N` link skips yt-dlp and probes fxtwitter directly. `/file` fetches
+  the photo from `pbs.twimg.com` (`?name=orig`) in Go, not through yt-dlp,
+  never following redirects.
 - If age-restricted tweets break, first check the production logs for the probe
   error text. A new yt-dlp wording means `sensitiveMediaRe` needs updating.
 - Never log tweet IDs or URLs (privacy rule across the whole backend: only the

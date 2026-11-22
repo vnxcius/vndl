@@ -93,7 +93,17 @@ func (s *Server) file(w http.ResponseWriter, r *http.Request) {
 	}
 
 	source, format, direct := job.URL, job.FormatID, false
-	if downloader.IsFxFormat(format) && downloader.IsTwitterURL(source) {
+	ext := job.Ext
+	photo := downloader.IsPhotoFormat(format) && downloader.IsTwitterURL(source)
+	if photo {
+		ev.Set("fallback", "fxtwitter").Set("photo", true)
+		photoURL, photoExt, err := downloader.ResolveFxPhoto(ctx, source, format, slog.With("endpoint", "file", "job_id", job.ID))
+		if err != nil {
+			reject(http.StatusUnprocessableEntity, "could not resolve this tweet's photo — try fetching it again", err.Error())
+			return
+		}
+		source, ext = photoURL, photoExt
+	} else if downloader.IsFxFormat(format) && downloader.IsTwitterURL(source) {
 		ev.Set("fallback", "fxtwitter")
 		mediaURL, err := downloader.ResolveFxURL(ctx, source, format, slog.With("endpoint", "file", "job_id", job.ID))
 		if err != nil {
@@ -106,7 +116,6 @@ func (s *Server) file(w http.ResponseWriter, r *http.Request) {
 		format = "bestvideo+bestaudio/best"
 	}
 
-	ext := job.Ext
 	if job.AudioOnly {
 		ext = "mp3"
 	}
@@ -121,6 +130,10 @@ func (s *Server) file(w http.ResponseWriter, r *http.Request) {
 
 	video, audio, merge := downloader.SplitMergeFormat(format)
 	switch {
+	case photo:
+		if _, err = downloader.FetchPhoto(ctx, source, out); err != nil && !errors.Is(err, errOverLimit) && ctx.Err() == nil {
+			err = &streamErr{msg: "couldn't fetch this photo — try again", detail: err.Error()}
+		}
 	case job.AudioOnly:
 		err = s.streamMP3(ctx, job, source, direct, out)
 	case merge && !direct:

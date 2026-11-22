@@ -35,8 +35,8 @@ export function DownloadConsole() {
 
   const probeMutation = useMutation({
     mutationFn: probe,
-    onSuccess: (meta) => {
-      setFormatId(pickDefaultFormat(meta.formats));
+    onSuccess: (meta, link) => {
+      setFormatId(pickDefaultFormat(meta.formats, link));
       setAudioOnly(false);
       setJobId(null);
     },
@@ -55,7 +55,10 @@ export function DownloadConsole() {
   const progress = useDownloadProgress(jobId);
   const meta = probeMutation.data;
   const videoFormats = meta ? videoOnlyDistinct(meta.formats) : [];
-  const selected = videoFormats.find((f) => f.format_id === formatId);
+  const photos = meta ? photoFormats(meta.formats) : [];
+  const choices = [...videoFormats, ...photos];
+  const selected = choices.find((f) => f.format_id === formatId);
+  const hasVideo = videoFormats.length > 0;
 
   const isBusy = probeMutation.isPending || downloadMutation.isPending;
   const isDownloading = jobId !== null && !(progress && terminalStatuses.has(progress.status));
@@ -90,9 +93,23 @@ export function DownloadConsole() {
     if (!meta) return;
     if (!audioOnly && !selected) return;
 
-    const needsMerge = !audioOnly && selected?.acodec === "none";
-    const isAvc = /^(avc1|h264)/i.test(selected?.vcodec ?? "");
-    const container = needsMerge ? (isAvc ? "mp4" : "mkv") : (selected?.ext ?? "mp4");
+    if (!audioOnly && isPhoto(selected!)) {
+      downloadMutation.mutate({
+        url,
+        audio_only: false,
+        format_id: selected!.format_id,
+        title: photos.length > 1 ? `${meta.title} ${selected!.format_note}` : meta.title,
+        ext: selected!.ext,
+        container: "",
+      });
+      return;
+    }
+    // A photo selection doesn't carry over to audio only: use the best video.
+    const video = selected && !isPhoto(selected) ? selected : videoFormats[0];
+
+    const needsMerge = !audioOnly && video?.acodec === "none";
+    const isAvc = /^(avc1|h264)/i.test(video?.vcodec ?? "");
+    const container = needsMerge ? (isAvc ? "mp4" : "mkv") : (video?.ext ?? "mp4");
 
     downloadMutation.mutate({
       url,
@@ -103,12 +120,12 @@ export function DownloadConsole() {
       // Audio-only still sends the selection: the backend ignores it for yt-dlp,
       // but needs it to route fx- formats through the direct-URL fallback.
       format_id: audioOnly
-        ? (selected?.format_id ?? "")
+        ? (video?.format_id ?? "")
         : needsMerge
           ? isAvc
-            ? `${selected!.format_id}+bestaudio[ext=m4a]/${selected!.format_id}+bestaudio/best`
-            : `${selected!.format_id}+bestaudio/best`
-          : (selected?.format_id ?? ""),
+            ? `${video!.format_id}+bestaudio[ext=m4a]/${video!.format_id}+bestaudio/best`
+            : `${video!.format_id}+bestaudio/best`
+          : (video?.format_id ?? ""),
       title: meta.title,
       ext: audioOnly ? "mp3" : container,
       container,
@@ -123,14 +140,14 @@ export function DownloadConsole() {
   return (
     <div className="flex flex-col gap-10">
       <section className="flex flex-col gap-3">
-        <Prompt cmd="paste_url" note="a video link" />
+        <Prompt cmd="paste_url" note="a video or photo link" />
         <form onSubmit={handleFetch} className="flex items-end gap-2 sm:gap-4">
           {/* text-base: anything smaller makes iOS Safari zoom in on focus */}
           <input
             id="url"
             type="url"
             inputMode="url"
-            aria-label="video link"
+            aria-label="video or photo link"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             placeholder="https://…"
@@ -177,7 +194,9 @@ export function DownloadConsole() {
               <p className="text-sm text-muted-foreground">
                 {meta.uploader}
                 <Dot />
-                {formatDuration(meta.duration)}
+                {hasVideo
+                  ? formatDuration(meta.duration)
+                  : `${photos.length} photo${photos.length === 1 ? "" : "s"}`}
               </p>
             </div>
           </a>
@@ -186,12 +205,19 @@ export function DownloadConsole() {
 
       {meta && (
         <section className="flex flex-col gap-4">
-          <Prompt cmd="select_format" note="pick a quality, or audio only" />
+          <Prompt
+            cmd="select_format"
+            note={hasVideo ? "pick a quality, or audio only" : "pick a photo"}
+          />
 
           <TermButton
             onClick={() => setAudioOnly((v) => !v)}
             aria-pressed={audioOnly}
-            className={cn("self-start", audioOnly && "bg-foreground text-background")}
+            className={cn(
+              "self-start",
+              audioOnly && "bg-foreground text-background",
+              !hasVideo && "hidden",
+            )}
           >
             {/* Its own parent: swapping icons otherwise inserts before the text
                 below, which translators replace, crashing React. */}
@@ -211,7 +237,7 @@ export function DownloadConsole() {
               audioOnly ? "hidden" : "flex",
             )}
           >
-            {videoFormats.map((f, i) => (
+            {choices.map((f, i) => (
               <li key={f.format_id}>
                 <button
                   type="button"
@@ -223,6 +249,12 @@ export function DownloadConsole() {
                 >
                   <span>
                     <span className="text-muted-foreground">{String(i + 1).padStart(2, "0")}</span>{" "}
+                    {isPhoto(f) && (
+                      <>
+                        {f.format_note}
+                        <Dot />
+                      </>
+                    )}
                     {f.resolution || f.format_note || f.format_id}
                     <Dot />
                     {f.ext}
@@ -347,9 +379,23 @@ function ProcessingIndicator() {
   );
 }
 
-function pickDefaultFormat(formats: Format[]): string | null {
-  const best = videoOnlyDistinct(formats)[0];
+// A ".../photo/N" link preselects that photo; otherwise the best video, or
+// the first photo of a tweet without one.
+function pickDefaultFormat(formats: Format[], link: string): string | null {
+  const photos = photoFormats(formats);
+  const n = /\/status(?:es)?\/\d+\/photo\/(\d+)/.exec(link)?.[1];
+  const linked = n ? photos[Number(n) - 1] : undefined;
+  const best = linked ?? videoOnlyDistinct(formats)[0] ?? photos[0];
   return best?.format_id ?? null;
+}
+
+// Tweet photos (served via fxtwitter), in the tweet's order.
+function isPhoto(f: Format): boolean {
+  return f.format_id.startsWith("fximg-");
+}
+
+function photoFormats(formats: Format[]): Format[] {
+  return formats.filter(isPhoto);
 }
 
 function videoOnlyDistinct(formats: Format[]): Format[] {
